@@ -3,9 +3,13 @@ groups:
     rules:
       - alert: HighErrorRate
         expr: |
-          sum(rate(demo_http_requests_total{status=~"5.."}[2m]))
-          /
-          sum(rate(demo_http_requests_total[2m])) > 0.30
+          (sum(rate(demo_http_requests_total[2m])) > 0)
+          and
+          (
+            sum(rate(demo_http_requests_total{status=~"5.."}[2m]))
+            /
+            sum(rate(demo_http_requests_total[2m])) > 0.30
+          )
         for: 30s
         labels:
           project_id: demo-shop
