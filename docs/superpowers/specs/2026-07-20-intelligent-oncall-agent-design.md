@@ -1,208 +1,237 @@
-# Intelligent OnCall Agent V1 Design
+# 智能 OnCall Agent V1 设计方案
 
-**Date:** 2026-07-20
+**日期：** 2026-07-20
 
-**Status:** Approved for implementation planning
+**状态：** 待用户完成书面规格审阅
 
-**Project:** Software delivery intelligent OnCall agent
+**项目：** 面向软件服务的智能 OnCall Agent
 
-## 1. Objective
+## 1. 项目目标
 
-Build a local, enterprise-style intelligent OnCall system for software services. The first version demonstrates one complete incident lifecycle:
+构建一个本地运行、具备企业级工程边界的软件智能 OnCall 系统。V1 需要演示一条完整故障闭环：
 
 ```text
-faulty release
-→ real monitoring alert
-→ unified alert ingestion and deduplication
-→ multi-agent investigation
-→ SOP retrieval from Milvus
-→ remediation planning
-→ human approval
-→ controlled rollback
-→ recovery verification
-→ incident resolution and audit timeline
+发布故障版本
+→ 产生真实监控告警
+→ 统一接收、标准化、去重和聚合告警
+→ 多 Agent 调查
+→ 从 Milvus 检索 SOP
+→ 生成修复计划
+→ 人工审批
+→ 受控回滚
+→ 验证恢复结果
+→ 关闭 Incident 并形成审计时间线
 ```
 
-The design prioritizes a working vertical slice over broad platform coverage. V1 targets one demo project and one fault family: a service release that increases HTTP errors.
+V1 优先跑通一条完整纵向链路，不追求同时覆盖大量项目和故障类型。首个演示项目只有一种主要故障：发布新版本后 HTTP 错误率显著升高。
 
-## 2. Confirmed Product Decisions
+## 2. 已确认的产品决策
 
-- Backend: Python and FastAPI.
-- Frontend: React and TypeScript.
-- Agent framework: LangGraph with LangChain integrations.
-- Model provider: Alibaba Cloud Bailian through an OpenAI-compatible API.
-- Knowledge retrieval: Milvus hybrid dense and BM25 retrieval.
-- Agent architecture: deterministic outer Incident Graph plus an investigation Supervisor and specialized subagents.
-- Tool integration: narrow MCP servers behind an MCP Gateway.
-- Runtime: Podman and `podman compose`; Docker Desktop and Docker CLI are not required.
-- Recovery: a host-side Recovery MCP process performs a real, allowlisted Podman rollback.
-- Authentication: local username/password authentication with JWT and RBAC.
-- UI: incident list plus a tabbed incident detail page.
-- V1 delivery priority: complete features first; comprehensive automated testing and agent evaluation are deferred to V1.1.
-- V1 does not implement long-term memory or automated experience accumulation.
+- 后端：Python + FastAPI。
+- 前端：React + TypeScript。
+- Agent 框架：LangGraph，配合 LangChain 集成。
+- 模型服务：通过 OpenAI-compatible API 对接阿里云百炼。
+- 知识检索：Milvus Dense 向量与 BM25 混合检索。
+- Agent 架构：外层确定性 Incident Graph，调查阶段由 Supervisor 编排专业 Agent。
+- 外部工具：多个窄接口 MCP Server，通过 MCP Gateway 统一接入。
+- 容器运行时：Podman + `podman compose`，不依赖 Docker Desktop 或 Docker CLI。
+- 故障恢复：宿主机运行 Recovery MCP，执行真实、白名单化的 Podman 回滚。
+- 用户认证：本地用户名和密码、JWT、RBAC。
+- Web 控制台：Incident 列表页 + 详情标签页。
+- 交付策略：V1 先完成业务功能，完整自动化测试和 Agent 评测推迟到 V1.1。
+- V1 不实现长期记忆和经验自动沉淀。
 
-## 3. Scope
+## 3. 项目范围
 
-### 3.1 V1 includes
+### 3.1 V1 实现范围
 
-- A demo FastAPI service with a healthy `v1` release and a faulty `v2` release.
-- A traffic generator that makes the release fault observable.
-- Prometheus metrics and an Alertmanager `HighErrorRate` alert.
-- An Alert Hub that accepts, validates, normalizes, deduplicates, and groups alerts.
-- PostgreSQL-backed Incident lifecycle state and LangGraph checkpoints.
-- A Supervisor that coordinates Investigation and Knowledge agents during investigation.
-- A Remediation Planner Agent that runs only after the diagnosis gate.
-- Manually authored, Git-versioned Skills.
-- Manually imported Markdown SOP and Runbook documents in Milvus.
-- Observability, Release, and Recovery MCP servers.
-- A deterministic Policy Engine and Recovery Executor.
-- Human approval before rollback.
-- Deterministic recovery verification using service and Prometheus data.
-- A React login page, incident list, incident detail tabs, approval controls, and admin user management.
-- Structured audit events, JSON logs, and Prometheus application metrics.
+- 一个演示 FastAPI 服务，包含健康版本 `v1` 和故障版本 `v2`。
+- 一个流量生成器，使版本故障可以被稳定观测。
+- Prometheus 指标和 Alertmanager `HighErrorRate` 告警。
+- Alert Hub：接收、校验、标准化、去重、聚合告警。
+- PostgreSQL 中的 Incident 生命周期数据和 LangGraph Checkpoint。
+- 调查阶段的 Supervisor、Investigation Agent、Knowledge Agent。
+- 诊断确认后的 Remediation Planner Agent。
+- 人工编写、Git 版本化的 Skill。
+- 人工导入 Milvus 的 Markdown SOP 和 Runbook。
+- Observability MCP、Release MCP、Recovery MCP。
+- 确定性的 Policy Engine 和 Recovery Executor。
+- 回滚前的人工审批。
+- 基于服务状态和 Prometheus 指标的恢复验证。
+- React 登录页、Incident 列表、详情标签、审批操作和用户管理。
+- 结构化审计事件、JSON 日志、Prometheus 应用指标。
 
-### 3.2 V1 explicitly excludes
+### 3.2 V1 明确不实现
 
-- User chat or conversational incident handling.
-- Conversation memory, user preference memory, incident memory, or procedural memory.
-- Automated extraction of experience from resolved incidents.
-- Automated updates to SOPs, Runbooks, or Skills.
-- Multiple tenants or multiple real application projects.
-- Kubernetes.
-- Kafka.
-- Autonomous source-code changes.
-- Unapproved production write actions.
-- Multi-source semantic alert correlation.
-- A browser-based knowledge upload and approval workflow.
-- Comprehensive unit, integration, browser, RAG evaluation, and Agent evaluation suites.
+- 用户聊天或对话式 Incident 处理。
+- 会话记忆、用户偏好记忆、历史事件记忆、程序记忆。
+- 从已解决 Incident 自动抽取经验。
+- 自动更新 SOP、Runbook 或 Skill。
+- 多租户或多个真实业务项目。
+- Kubernetes。
+- Kafka。
+- 自动修改源代码。
+- 未经审批的生产环境写操作。
+- 多告警源之间的大模型语义关联。
+- 浏览器中的知识上传、审核和发布工作流。
+- 完整的单元测试、集成测试、浏览器测试、RAG 评测和 Agent 评测体系。
 
-### 3.3 Later versions
+### 3.3 后续版本
 
-V1.1 adds automated tests, replay fixtures, RAG retrieval evaluation, Agent evaluation, MCP contract tests, and browser end-to-end tests.
+V1.1 建设测试和质量体系，包括：自动化测试、故障回放数据、RAG 检索评测、Agent 评测、MCP 契约测试和浏览器端到端测试。
 
-V2 adds user conversation, short- and long-term memory, structured incident experience, deduplication and review of learned experience, and reviewed SOP or Skill evolution.
+V2 增加：用户对话、短期和长期记忆、结构化历史事件经验、经验脱敏去重与人工审核，以及经过审核的 SOP 或 Skill 演化。
 
-## 4. Architecture Alternatives and Decision
+## 4. 总体架构选型
 
-### 4.1 Alternative A: fully autonomous Supervisor
+### 4.1 方案 A：完全自治的 Supervisor
 
-The Supervisor freely chooses agents, tools, approval, execution, and verification steps. This minimizes code but cannot reliably guarantee that investigation, approval, or verification occurs. It also makes checkpoint recovery and deterministic testing difficult.
+Supervisor 自由决定调用 Agent、工具、审批、执行和验证步骤。
 
-### 4.2 Alternative B: deterministic lifecycle plus controlled Supervisor
+优点：
 
-The outer LangGraph controls the Incident lifecycle. A Supervisor dynamically coordinates read-only investigation inside a bounded subgraph. Planning, approval, execution, and verification are explicit nodes.
+- 代码量少。
+- 行为灵活。
+- 容易快速展示多 Agent。
 
-This is the selected design because it preserves flexible investigation while making side effects predictable, reviewable, interruptible, and auditable.
+缺点：
 
-### 4.3 Alternative C: peer-to-peer or event-driven Agent swarm
+- 无法可靠保证调查、审批和验证一定发生。
+- Supervisor 可能过早执行修复。
+- 执行路径不稳定。
+- Checkpoint 恢复和确定性测试困难。
 
-Agents communicate directly or run as independently deployed services. This provides strong isolation and scale but introduces coordination loops, distributed state, and infrastructure that are unnecessary for one MVP incident flow.
+不选择该方案。
 
-## 5. System Architecture
+### 4.2 方案 B：确定性生命周期 + 受控 Supervisor
+
+外层 LangGraph 控制 Incident 生命周期。只有调查阶段允许 Supervisor 动态协调只读专业 Agent。修复计划、审批、执行和验证都是显式 Graph 节点。
+
+该方案是最终选择，因为它同时提供：
+
+- 灵活的故障调查。
+- 可预测的副作用。
+- 可暂停和恢复的人工审批。
+- 清晰的审计路径。
+- 明确的安全边界。
+
+代价是必须提前定义状态和节点接口，但对 OnCall 系统而言这是合理成本。
+
+### 4.3 方案 C：Agent 点对点协作或事件驱动 Agent 集群
+
+每个 Agent 独立部署并直接互相发送任务。
+
+优点：隔离和伸缩能力较强。
+
+缺点：容易形成循环、分布式状态复杂、最终决策责任不明确，对单一 MVP 故障链路过重。
+
+不选择该方案。
+
+## 5. 系统架构
 
 ```mermaid
 flowchart TD
-    DS[Demo FastAPI Service] --> PM[Prometheus]
-    PM --> AM[Alertmanager]
-    AM --> AH[Alert Hub]
-    AH --> IM[Incident Manager]
-    IM --> CQ[Celery / Redis]
-    CQ --> IG[Incident Graph]
+    DS["演示 FastAPI 服务"] --> PM["Prometheus"]
+    PM --> AM["Alertmanager"]
+    AM --> AH["Alert Hub"]
+    AH --> IM["Incident Manager"]
+    IM --> CQ["Celery / Redis"]
+    CQ --> IG["Incident Graph"]
 
-    IG --> IS[Investigation Subgraph]
-    IS --> SV[Supervisor Agent]
-    SV --> IA[Investigation Agent]
-    SV --> KA[Knowledge Agent]
+    IG --> IS["Investigation Subgraph"]
+    IS --> SV["Supervisor Agent"]
+    SV --> IA["Investigation Agent"]
+    SV --> KA["Knowledge Agent"]
 
-    IA --> MG[MCP Gateway]
-    KA --> RS[RAG Service]
-    RS --> MV[Milvus]
-    MG --> OM[Observability MCP]
-    MG --> RM[Release MCP]
+    IA --> MG["MCP Gateway"]
+    KA --> RS["RAG Service"]
+    RS --> MV["Milvus"]
+    MG --> OM["Observability MCP"]
+    MG --> RM["Release MCP"]
 
-    IS --> DG[Diagnosis Gate]
-    DG --> RP[Remediation Planner Agent]
-    RP --> PE[Policy Engine]
-    PE --> AP[Human Approval Interrupt]
-    AP --> EX[Recovery Executor]
-    EX --> HR[Host Recovery MCP]
-    HR --> PC[Podman Compose]
-    EX --> VN[Verification Node]
-    VN --> CL[Close or Reinvestigate]
+    IS --> DG["Diagnosis Gate"]
+    DG --> RP["Remediation Planner Agent"]
+    RP --> PE["Policy Engine"]
+    PE --> AP["人工审批 Interrupt"]
+    AP --> EX["Recovery Executor"]
+    EX --> HR["宿主机 Recovery MCP"]
+    HR --> PC["Podman Compose"]
+    EX --> VN["Verification Node"]
+    VN --> CL["关闭或重新调查"]
 
-    UI[React Incident Web] --> API[FastAPI API]
+    UI["React Incident Web"] --> API["FastAPI API"]
     API --> AH
     API --> AP
-    API --> PG[(PostgreSQL)]
+    API --> PG[("PostgreSQL")]
     IG --> PG
 ```
 
-The core OnCall backend is a modular monolith. MCP servers are separate processes with explicit tool contracts. The demo project is isolated from the OnCall platform except through alerts and MCP interfaces.
+OnCall 后端采用模块化单体，避免 V1 过早微服务化。MCP Server 作为独立进程运行，通过明确的工具契约和平台交互。演示项目只通过告警和 MCP 接口与 OnCall 平台连接。
 
-## 6. Component Responsibilities
+## 6. 组件职责
 
 ### 6.1 FastAPI API
 
-- Accept Alertmanager webhooks.
-- Expose authentication, Incident, approval, retry, report, user administration, and SSE endpoints.
-- Persist commands before queueing background work.
-- Never run a long Agent investigation inside a request handler.
+- 接收 Alertmanager Webhook。
+- 提供认证、Incident、审批、重试、报告、用户管理和 SSE API。
+- 所有命令先持久化，再投递后台任务。
+- 不在 HTTP 请求中直接运行长时间 Agent 调查。
 
 ### 6.2 Alert Hub
 
-- Authenticate the configured alert source.
-- Preserve the raw webhook.
-- Convert source payloads into `AlertEnvelope` objects.
-- Calculate or validate fingerprints.
-- Deduplicate repeated notifications.
-- Apply deterministic correlation rules.
-- Attach alerts to an existing open Incident or create a new Incident.
-- Track `firing` and `resolved` alert states.
+- 验证告警来源和请求格式。
+- 保存原始 Webhook。
+- 将来源数据转换为统一的 `AlertEnvelope`。
+- 校验或生成告警指纹。
+- 对重复通知进行去重。
+- 应用确定性基础关联规则。
+- 将告警关联到已有开放 Incident，或创建新 Incident。
+- 管理 `firing` 和 `resolved` 状态。
 
-Alert normalization, identity, and basic grouping use deterministic code. These operations must be idempotent, low latency, replayable, and available even when the model provider is unavailable.
+标准化、身份判定和基础聚合必须使用确定性代码。这些操作要求幂等、低延迟、可回放，而且在模型服务不可用时仍然必须工作。
 
 ### 6.3 Incident Manager
 
-- Own valid Incident state transitions.
-- Associate alerts with Incidents.
-- Create audit events.
-- Submit idempotent start or resume jobs.
-- Reject stale commands and invalid transitions.
+- 维护合法的 Incident 状态转换。
+- 维护告警和 Incident 的关联关系。
+- 生成审计事件。
+- 投递幂等的启动或恢复任务。
+- 拒绝过期命令和非法状态转换。
 
 ### 6.4 Job Worker
 
-- Consume Celery tasks from Redis.
-- Start or resume LangGraph runs.
-- Use PostgreSQL as the durable source of truth.
-- Release the Worker when a Graph reaches an approval interrupt.
+- 从 Redis 消费 Celery 任务。
+- 启动或恢复 LangGraph。
+- 以 PostgreSQL 作为持久化事实来源。
+- Graph 到达审批 Interrupt 后结束当前任务，不长期占用 Worker。
 
 ### 6.5 RAG Service
 
-- Import approved Markdown SOP and Runbook files.
-- Split by Markdown section and then by token size.
-- Create dense and sparse representations.
-- Apply project, service, document type, version, and review-status filters.
-- Return bounded results with source paths and section citations.
+- 导入已审核的 Markdown SOP 和 Runbook。
+- 先按 Markdown 标题层级切分，再按 Token 长度二次切分。
+- 创建 Dense 和 Sparse 表示。
+- 按项目、服务、文档类型、版本和审核状态过滤。
+- 返回数量受限、带来源和章节引用的检索结果。
 
 ### 6.6 Policy Engine
 
-- Enforce environment and action allowlists.
-- Validate ActionPlan hashes and approval state.
-- Validate expected current release and allowed target release.
-- Reject expired or stale plans.
-- Assign explicit failure categories.
+- 执行环境和动作白名单。
+- 校验 ActionPlan 哈希和审批状态。
+- 校验当前版本和允许回滚的目标版本。
+- 拒绝过期或现场条件已变化的计划。
+- 将错误分类为可重试、需要人工或终止。
 
 ### 6.7 Recovery Executor
 
-- Accept only approved structured `ActionSpec` values.
-- Validate idempotency and preconditions.
-- Call the Recovery MCP tool once.
-- Record execution state before and after the call.
-- Never generate new commands when execution fails.
+- 只接收已经审批的结构化 `ActionSpec`。
+- 校验幂等状态和执行前置条件。
+- 调用一次 Recovery MCP。
+- 调用前后都记录执行状态。
+- 执行失败时禁止临时生成新命令。
 
-## 7. Unified Alert Model
+## 7. 统一告警模型
 
-All source adapters produce an `AlertEnvelope` with these required concepts:
+所有告警来源 Adapter 都必须输出 `AlertEnvelope`：
 
 ```json
 {
@@ -220,19 +249,21 @@ All source adapters produce an `AlertEnvelope` with these required concepts:
 }
 ```
 
-Fingerprint selection:
+指纹规则：
 
-1. Use the source fingerprint when it is present and valid.
-2. Otherwise hash `project_id`, `environment`, `service`, `alert_name`, and configured stable labels.
-3. Repeated deliveries update `last_seen`, `status`, and `occurrence_count`; they do not create new alerts.
+1. 来源提供合法 fingerprint 时优先使用。
+2. 否则使用 `project_id`、`environment`、`service`、`alert_name` 和配置的稳定标签计算 SHA-256。
+3. 重复通知只更新 `last_seen`、`status` 和 `occurrence_count`，不创建新告警。
 
-V1 Incident grouping requires the same project, environment, service, and configured correlation key inside a five-minute window. A resolved alert updates alert state but cannot bypass the Verification Node to close an Incident.
+V1 的 Incident 聚合条件：项目、环境、服务和配置的 `correlation_key` 相同，并且落在五分钟时间窗口内。
 
-Future semantic correlation will use a hybrid approach: deterministic identity and candidate grouping remain mandatory; an LLM may recommend cross-service merges but cannot change fingerprints, delete alerts, or directly close Incidents.
+告警变成 `resolved` 只更新告警状态，不能绕过 Verification Node 直接关闭 Incident。
 
-## 8. Incident Graph and Multi-Agent Orchestration
+未来语义关联采用混合方案：告警身份和候选分组仍由确定性规则完成；大模型只能建议跨服务合并，不能修改 fingerprint、删除告警或直接关闭 Incident。
 
-The outer graph is deterministic:
+## 8. Incident Graph 与多 Agent 编排
+
+外层状态机固定为：
 
 ```text
 normalize_incident
@@ -248,71 +279,84 @@ normalize_incident
 
 ### 8.1 Supervisor Agent
 
-- Operates only inside the Investigation Subgraph.
-- Reviews compact Incident facts and evidence summaries.
-- Chooses whether to call Investigation or Knowledge.
-- Determines what evidence is still missing.
-- Submits a diagnosis candidate to the Diagnosis Gate.
-- Cannot call Recovery MCP or approve an ActionPlan.
+- 只在 Investigation Subgraph 中运行。
+- 阅读精简后的 Incident 事实和证据摘要。
+- 决定调用 Investigation Agent 还是 Knowledge Agent。
+- 判断仍缺少哪些证据。
+- 向 Diagnosis Gate 提交诊断候选。
+- 无权调用 Recovery MCP。
+- 无权批准 ActionPlan。
 
 ### 8.2 Investigation Agent
 
-- Uses read-only Observability and Release MCP tools.
-- Produces observations, evidence, hypotheses, and suggested next checks.
-- Stores references to raw data rather than large raw log bodies in Graph state.
+- 只使用 Observability MCP 和 Release MCP 的只读工具。
+- 输出观察、证据、假设和下一步检查建议。
+- Graph State 只保存原始数据引用和摘要，不保存大段原始日志。
 
 ### 8.3 Knowledge Agent
 
-- Uses RAG retrieval tools only.
-- Returns applicable steps, warnings, document versions, and citations.
-- Cannot present an unapproved or expired document as authoritative guidance.
+- 只使用 RAG 检索工具。
+- 返回适用步骤、警告、文档版本和引用。
+- 不能把未审核或已失效的文档作为权威依据。
 
 ### 8.4 Remediation Planner Agent
 
-- Runs only after the Diagnosis Gate accepts a diagnosis.
-- Receives the selected hypothesis, supporting and opposing evidence, citations, current release, and environment.
-- Produces a structured ActionPlan with preconditions, risk, rollback target, and verification criteria.
-- Has no execution tools.
+- 只有 Diagnosis Gate 接受诊断后才运行。
+- 输入包括：选定根因、支持与反对证据、知识引用、当前版本和环境。
+- 输出结构化 ActionPlan，包括前置条件、风险、目标版本和验证标准。
+- 不拥有任何执行工具。
 
-### 8.5 Investigation limits
+### 8.5 调查限制
 
-- Maximum investigation rounds: 4.
-- Maximum subagent calls per round: 2.
-- Maximum log result size: 100 entries or 20 KB.
-- Maximum RAG results: 5 chunks.
-- Maximum model calls per Incident: 12.
-- Investigation time budget: 5 minutes, excluding human approval wait.
-- Maximum reinvestigation after failed verification: 1.
+- 最大调查轮数：4。
+- 每轮最多调用两个子 Agent。
+- 单次日志结果最多100条或20 KB。
+- 单次 RAG 最多返回5个 Chunk。
+- 每个 Incident 最多调用模型12次。
+- 调查时限5分钟，不包含人工审批等待时间。
+- 验证失败后最多重新调查一次。
 
-Exceeding a limit moves the Incident to `NEED_HUMAN` with an explicit reason.
+超过限制后，Incident 进入 `NEED_HUMAN` 并记录明确原因。
 
-## 9. Structured Contracts
+## 9. 结构化数据契约
 
-Agent and Graph boundaries use Pydantic models rather than unconstrained text. The core contracts are:
+Agent 和 Graph 边界使用 Pydantic 模型，不使用无约束自由文本：
 
-- `AlertEnvelope`: normalized alert facts.
-- `Evidence`: source type, source reference, query summary, observation, and collection time.
-- `Hypothesis`: root-cause statement, confidence evidence, supporting evidence IDs, opposing evidence IDs, and next checks.
-- `KnowledgeCitation`: document, version, section, source path, and excerpt reference.
-- `ActionPlan`: summary, risk, preconditions, ordered actions, rollback behavior, and verification criteria.
-- `ActionSpec`: tool name and validated tool-specific arguments.
-- `VerificationResult`: checks, observations, outcome, and reason.
+- `AlertEnvelope`：标准化告警事实。
+- `Evidence`：来源类型、来源引用、查询摘要、观察结果、采集时间。
+- `Hypothesis`：根因描述、支持证据、反对证据和下一步检查。
+- `KnowledgeCitation`：文档、版本、章节、文件路径和引用位置。
+- `ActionPlan`：摘要、风险、前置条件、动作、回滚行为、验证标准。
+- `ActionSpec`：工具名称和经过校验的工具参数。
+- `VerificationResult`：检查项、观察值、最终结论和原因。
 
-Model output that fails schema validation is retried once with validation feedback. A second failure stops automatic processing and requests human attention.
+模型输出未通过 Schema 校验时，只允许携带校验错误重试一次。第二次仍失败时停止自动处理并请求人工介入。
 
-## 10. RAG Design
+## 10. RAG 设计
 
-### 10.1 Alternatives
+### 10.1 检索方案选择
 
-- Dense-only retrieval is simple but weak for exact error codes, service names, metric names, and versions.
-- Dense plus BM25 retrieval covers semantic language and precise operational identifiers.
-- Knowledge graph retrieval is useful for complex dependency reasoning but requires graph extraction and maintenance beyond V1.
+方案 A：只使用 Dense 向量检索。
 
-V1 selects Milvus dense plus BM25 hybrid retrieval with reciprocal-rank fusion.
+- 优点：实现简单，适合自然语言语义。
+- 缺点：对错误码、服务名、指标名和版本号等精确标识符表现不足。
 
-### 10.2 Document model
+方案 B：Dense + BM25 混合检索。
 
-Each chunk includes:
+- 同时覆盖自然语言语义和精确关键词。
+- 可以直接在 Milvus 中实现，不额外部署 Elasticsearch。
+- 适合同时包含说明文本与技术标识符的运维文档。
+
+方案 C：知识图谱 + 向量检索。
+
+- 适合复杂服务依赖推理。
+- 但需要实体抽取、图数据库和关系维护，超出 V1 范围。
+
+V1 选择方案 B，使用 RRF 融合 Dense 与 BM25 结果。
+
+### 10.2 文档数据结构
+
+每个 Chunk 包含：
 
 ```text
 chunk_id
@@ -331,13 +375,13 @@ dense_vector
 sparse_vector
 ```
 
-Only `review_status=approved` documents are returned. V1 supports Markdown knowledge files. Original documents and Skill packages remain in Git; Milvus is a retrieval index, not the authoritative document store.
+只返回 `review_status=approved` 的文档。V1 只支持 Markdown 知识文件。原始文档和 Skill 保存在 Git 中，Milvus 只是检索索引，不是权威文档存储。
 
-Dense embeddings use the configured Bailian OpenAI-compatible embedding endpoint. The embedding model name is supplied through environment configuration so the ingestion and query paths always use the same model and vector dimension.
+Dense Embedding 通过配置的百炼 OpenAI-compatible Embedding 接口生成。导入和查询必须使用相同模型及相同向量维度，具体模型名通过环境变量配置。
 
-### 10.3 Ingestion
+### 10.3 知识导入
 
-Knowledge ingestion is a CLI operation:
+使用 CLI 导入：
 
 ```bash
 python -m oncall.cli knowledge ingest \
@@ -345,19 +389,28 @@ python -m oncall.cli knowledge ingest \
   --path project-packs/demo-shop/knowledge
 ```
 
-V1 does not expose browser upload or automatic knowledge writes.
+V1 不提供浏览器知识上传，也不允许 Agent 自动写入知识库。
 
-## 11. Skill Design
+## 11. Skill 设计
 
-### 11.1 Alternatives
+### 11.1 Skill 触发方式选择
 
-- Letting the Supervisor browse every Skill is flexible but causes context growth and poor selection as the registry grows.
-- Deterministic one-to-one rules are reliable but cannot handle ambiguous fault families.
-- Hybrid selection first filters candidates by metadata and then lets the Supervisor select among at most three candidates.
+方案 A：Supervisor 浏览所有 Skill 后自主选择。
 
-V1 selects hybrid Skill triggering.
+- 灵活，但 Skill 增多后上下文持续膨胀。
 
-### 11.2 Skill package
+方案 B：确定性规则一对一触发。
+
+- 稳定，但难以处理同一告警对应多种故障的情况。
+
+方案 C：规则筛选候选 + Supervisor 最终选择。
+
+- 先根据告警名、服务类型和标签筛出最多三个候选 Skill。
+- 再由 Supervisor 根据证据选择。
+
+V1 选择方案 C。
+
+### 11.2 Skill 包结构
 
 ```text
 skills/post_deployment_regression/
@@ -367,19 +420,31 @@ skills/post_deployment_regression/
     └── example.json
 ```
 
-The manifest declares applicable alert names, service types, labels, permitted read-only tools, forbidden actions, expected output schema, and Skill version. Skills guide investigation and cannot bypass Policy or call Recovery MCP.
+Manifest 声明：适用告警、服务类型、标签、允许的只读工具、禁止动作、输出 Schema 和版本号。
 
-V1 Skills are manually authored and versioned in Git. Automatic Skill generation or mutation is a V2 feature.
+Skill 只指导调查，不能绕过 Policy，也不能调用 Recovery MCP。
 
-## 12. MCP Design
+V1 Skill 全部由人工编写并纳入 Git 版本管理。Skill 自动生成或修改属于 V2。
 
-### 12.1 Alternatives
+## 12. MCP 设计
 
-- Direct SDK access from each Agent duplicates authentication, timeout, result-bounding, and audit logic.
-- One large MCP server mixes read-only and write privileges.
-- Multiple narrow MCP servers isolate privilege and backend ownership.
+### 12.1 MCP 拆分方式选择
 
-V1 uses multiple narrow servers behind an MCP Gateway. Containerized MCP servers use Streamable HTTP. The host Recovery MCP listens on loopback; the Worker addresses the macOS host through Podman's `host.containers.internal` gateway, which is resolved by the Podman Machine network. Startup readiness fails if the Worker cannot reach the Recovery MCP endpoint.
+方案 A：Agent 直接调用各系统 SDK。
+
+- 会在多个 Agent 中重复认证、超时、截断和审计逻辑。
+
+方案 B：一个大型 MCP Server 提供所有工具。
+
+- 部署简单，但混合只读与写权限，安全边界过大。
+
+方案 C：多个窄接口 MCP Server。
+
+- 按后端和权限拆分。
+- 每个接口用途固定、参数强类型。
+- 可以独立配置凭证和审计。
+
+V1 选择方案 C，通过 MCP Gateway 统一连接。容器内 MCP 使用 Streamable HTTP。宿主机 Recovery MCP 只监听 loopback；Worker 通过 Podman Machine 的 `host.containers.internal` 网关访问宿主机，启动就绪检查必须验证该连接可用。
 
 ### 12.2 Observability MCP
 
@@ -404,87 +469,141 @@ get_release_diff
 rollback_release
 ```
 
-The Recovery tool accepts project, environment, service, expected current version, target version, approval proof, and idempotency key. It does not accept command strings, arbitrary paths, SQL, shell content, or raw Podman arguments.
+Recovery Tool 接收：项目、环境、服务、预期当前版本、目标版本、审批凭证和幂等键。
 
-The MCP Gateway enforces schemas, timeouts, result limits, service authentication, audit metadata, and error mapping.
+它禁止接收：命令字符串、任意路径、SQL、Shell 内容或原始 Podman 参数。
 
-## 13. Podman Runtime and Real Rollback
+MCP Gateway 统一执行 Schema 校验、超时、结果大小限制、服务认证、审计元数据和错误映射。
 
-### 13.1 Alternatives
+## 13. Podman 运行环境与真实回滚
 
-- Raw `podman run` scripts make multi-service lifecycle and networking difficult to maintain.
-- Podman Quadlet is appropriate for long-lived Linux systemd deployment but awkward for macOS development.
-- `podman compose` provides a readable local multi-container definition.
+### 13.1 容器编排选择
 
-V1 uses `podman compose`, `compose.yaml`, and `Containerfile` files. It avoids Docker-exclusive Compose extensions.
+方案 A：直接维护大量 `podman run` 脚本。
 
-The Podman-managed services include API, Worker, PostgreSQL, Redis, Milvus and its required standalone dependencies, Prometheus, Alertmanager, demo service, traffic generator, frontend, Observability MCP, and Release MCP.
+- 网络、卷、环境变量和生命周期难以维护。
 
-### 13.2 Recovery process placement
+方案 B：Podman Quadlet。
 
-Mounting the Podman socket into a container gives that container broad control of the environment. V1 therefore runs Recovery MCP as a host-side Python process.
+- 适合 Linux systemd 长期部署。
+- 不适合作为 macOS MVP 的主要开发体验。
 
-The process:
+方案 C：`podman compose`。
 
-1. Listens on `127.0.0.1`.
-2. Validates a dedicated service secret.
-3. Validates the project, service, current version, target version, plan hash, and idempotency key.
-4. Updates only the controlled demo release state.
-5. Invokes a fixed internal Podman argument list.
-6. Records the result and exposes idempotent status lookup.
+- 多容器定义清晰。
+- 易于版本管理。
+- 能满足本地 MVP。
 
-The LLM never provides command strings or Compose file paths.
+V1 选择方案 C，使用 `compose.yaml` 和 `Containerfile`，避免依赖 Docker 专属 Compose 扩展。
 
-## 14. Authentication and Authorization
+Podman 管理的主要服务包括：API、Worker、PostgreSQL、Redis、Milvus 及其 Standalone 依赖、Prometheus、Alertmanager、演示服务、流量生成器、前端、Observability MCP 和 Release MCP。
 
-### 14.1 Alternatives
+### 13.2 Recovery MCP 的运行位置
 
-- No authentication cannot produce trustworthy approval audit records.
-- Keycloak/OIDC is closer to enterprise SSO but adds substantial V1 infrastructure.
-- Local password authentication with JWT supports real user identity and RBAC while preserving an upgrade path to OIDC.
+把 Podman Socket 挂载进容器，相当于赋予该容器大范围容器控制权限，因此 V1 不这样做。
 
-V1 uses local authentication.
+Recovery MCP 作为宿主机 Python 进程运行：
 
-### 14.2 Passwords and tokens
+1. 监听宿主机 loopback。
+2. 校验独立服务密钥。
+3. 校验项目、服务、当前版本、目标版本、计划哈希和幂等键。
+4. 只更新指定演示项目的受控发布状态。
+5. 使用内部固定参数列表调用 Podman。
+6. 保存执行结果，并提供按幂等键查询状态的能力。
 
-- Passwords use Argon2id hashes.
-- Access JWT lifetime: 15 minutes.
-- Access tokens remain in React memory.
-- Refresh token lifetime: 7 days.
-- Refresh tokens are random values stored in HttpOnly, SameSite cookies.
-- PostgreSQL stores only refresh-token hashes.
-- Refresh tokens rotate on use and are revoked on logout or user disablement.
-- JWT signing uses HS256 with a random environment-provided secret because one API issues and verifies V1 tokens.
+LLM 永远不能传入命令字符串或 Compose 文件路径。
 
-### 14.3 Roles
+## 14. 用户认证与权限
 
-- `viewer`: read Incidents, evidence, plans, citations, reports, and audit events.
-- `operator`: viewer permissions plus retry and reinvestigation commands.
-- `approver`: viewer permissions plus approve or reject ActionPlans.
-- `admin`: all web permissions plus user administration. Knowledge ingestion remains a host-side CLI operation in V1.
+### 14.1 认证方案选择
 
-Approvals bind `user_id`, `action_plan_id`, `action_plan_hash`, decision, comment, and timestamp. Changing a plan invalidates its previous approvals.
+方案 A：不做用户认证。
 
-V1 does not implement self-registration, email verification, password-reset email, MFA, or enterprise SSO. An initial administrator is created through a CLI command rather than a password embedded in Compose.
+- 无法形成可信审批人记录。
 
-## 15. Persistence and Background Work
+方案 B：直接部署 Keycloak/OIDC。
 
-### 15.1 Alternatives
+- 接近企业 SSO，但会给 V1 增加较多基础设施和配置工作。
 
-- Running a Graph inside the webhook request blocks alert delivery.
-- FastAPI background tasks share the API process and do not provide durable retry.
-- Celery plus Redis separates API and workers and provides bounded retry with modest infrastructure.
-- Kafka is unnecessary for one source and one worker family.
+方案 C：本地密码认证 + JWT + RBAC。
 
-V1 uses Celery and Redis. PostgreSQL remains the durable source of truth; Redis is a broker, short-lived lock store, and SSE event distribution mechanism.
+- 能实现真实登录、角色和审批审计。
+- 后续可以通过统一认证接口替换为 OIDC。
 
-Every start or resume job uses an idempotent key based on Incident, operation, and checkpoint version. A Graph interrupt persists its checkpoint and ends the Worker job. Approval creates a new resume job rather than holding a Worker during human wait.
+V1 选择方案 C。
 
-### 15.2 PostgreSQL access
+### 14.2 密码与 Token
 
-V1 uses SQLAlchemy 2-style models and Alembic migrations. Database models remain separate from Pydantic API and Agent contracts.
+- 密码使用 Argon2id 哈希。
+- Access JWT 有效期15分钟。
+- Access Token 只保存在 React 内存。
+- Refresh Token 有效期7天。
+- Refresh Token 使用不可预测随机值，放在 HttpOnly、SameSite Cookie 中。
+- PostgreSQL 只保存 Refresh Token 哈希。
+- 刷新时执行 Token Rotation。
+- 用户退出或被禁用时撤销 Refresh Token。
+- V1 使用环境变量提供的随机 HS256 密钥，因为只有一个 API 签发和验证 Token。
 
-Core relational entities:
+### 14.3 角色
+
+- `viewer`：查看 Incident、证据、计划、引用、报告和审计事件。
+- `operator`：拥有 viewer 权限，并可重试或请求重新调查。
+- `approver`：拥有 viewer 权限，并可批准或拒绝 ActionPlan。
+- `admin`：拥有所有 Web 权限和用户管理权限。V1 知识导入仍是宿主机 CLI 操作。
+
+Approval 必须绑定：`user_id`、`action_plan_id`、`action_plan_hash`、决策、备注和时间。ActionPlan 发生变化后，之前的审批立即失效。
+
+V1 不实现自主注册、邮件验证、找回密码邮件、MFA 和企业 SSO。初始管理员通过 CLI 创建，不把初始密码写入 Compose 文件。
+
+## 15. 数据持久化与后台任务
+
+### 15.1 后台任务方案选择
+
+方案 A：在 Webhook 请求中直接运行 Graph。
+
+- 会长时间阻塞 Alertmanager 请求。
+
+方案 B：FastAPI BackgroundTasks。
+
+- 与 API 进程共享生命周期，重启后无法可靠恢复。
+
+方案 C：Celery + Redis。
+
+- API 和 Worker 分离。
+- 支持重试、超时和并发控制。
+- 基础设施成本低于 Kafka。
+
+V1 选择方案 C。
+
+PostgreSQL 是持久化事实来源。Redis 只作为 Broker、短期锁和 SSE 实时通知通道。
+
+每个 Graph 启动或恢复任务都必须使用基于 Incident、操作和 Checkpoint 版本生成的幂等键。
+
+Graph 到达人工审批节点后：
+
+1. 将 Checkpoint 写入 PostgreSQL。
+2. 当前 Worker 任务正常结束。
+3. 用户审批后创建新的 Resume Job。
+4. 新 Worker 从 Checkpoint 恢复 Graph。
+
+### 15.2 PostgreSQL 技术选择
+
+方案 A：直接写 SQL。
+
+- 灵活，但模型、迁移和事务代码容易分散。
+
+方案 B：SQLModel。
+
+- 入门简单，但复杂关联最终仍需理解 SQLAlchemy。
+
+方案 C：SQLAlchemy 2 风格模型 + Alembic。
+
+- 适合复杂关联、事务、迁移和审计。
+- 数据库模型与 Pydantic API/Agent 模型可以明确分离。
+
+V1 选择方案 C。
+
+核心实体：
 
 ```text
 users
@@ -506,11 +625,11 @@ audit_events
 LangGraph checkpoint tables
 ```
 
-Runtime data is not a memory system and is not automatically reused as learned experience in another Incident.
+这些是运行数据，不是记忆系统，也不会自动成为其他 Incident 的学习经验。
 
-## 16. API Surface
+## 16. API 边界
 
-Authentication:
+认证：
 
 ```text
 POST /api/v1/auth/login
@@ -519,13 +638,13 @@ POST /api/v1/auth/logout
 GET  /api/v1/auth/me
 ```
 
-Alert ingestion:
+告警接入：
 
 ```text
 POST /api/v1/webhooks/alertmanager/{project_id}
 ```
 
-Incident operations:
+Incident：
 
 ```text
 GET  /api/v1/incidents
@@ -538,7 +657,7 @@ POST /api/v1/incidents/{incident_id}/retries
 GET  /api/v1/incidents/{incident_id}/report
 ```
 
-Administration:
+用户管理：
 
 ```text
 GET   /api/v1/admin/users
@@ -546,11 +665,11 @@ POST  /api/v1/admin/users
 PATCH /api/v1/admin/users/{user_id}
 ```
 
-## 17. Frontend Design
+## 17. 前端设计
 
-V1 uses separate list and detail pages instead of a dense three-column command center or a chat-first UI.
+V1 选择 Incident 列表页 + 详情标签页，不使用高密度三栏指挥中心，也不使用聊天优先界面。
 
-Routes:
+路由：
 
 ```text
 /login
@@ -559,99 +678,127 @@ Routes:
 /admin/users
 ```
 
-Incident detail tabs:
+Incident 详情标签：
 
-- Overview: state, severity, service, environment, alert summary, and diagnosis.
-- Timeline: alert, Agent, tool, approval, execution, and verification events.
-- Evidence: metrics, logs, release facts, and source references.
-- Knowledge: SOP and Runbook citations with version and section.
-- Remediation: plan, risk, preconditions, target version, verification criteria, and approve/reject controls.
-- Audit: actor, action, result, correlation IDs, and timestamps.
+- 概览：状态、严重度、服务、环境、告警摘要和诊断结论。
+- 时间线：告警、Agent、工具、审批、执行和验证事件。
+- 证据：指标、日志、发布记录及来源引用。
+- 知识：SOP、Runbook、版本和章节引用。
+- 恢复计划：动作、风险、前置条件、目标版本、验证标准和审批操作。
+- 审计：操作者、动作、结果、关联 ID 和时间。
 
-Commands use REST. Live Incident updates use SSE because updates are predominantly server-to-browser. SSE reconnection uses event IDs. Chat and bidirectional realtime messaging are deferred to V2.
+命令操作使用 REST。Incident 实时更新使用 SSE，因为主要通信方向是服务端向浏览器推送。
 
-Redis notifies connected API instances about new events, but replay comes from PostgreSQL `audit_events`. A reconnecting client sends its last event ID and receives any missed durable events before resuming the live stream.
+Redis 只通知 API 实例有新事件；断线重放从 PostgreSQL `audit_events` 获取。客户端携带最后一个 Event ID，API 先补发缺失的持久化事件，再恢复实时流。
 
-## 18. Safety and Failure Handling
+聊天和双向实时通信推迟到 V2。
 
-### 18.1 Failure categories
+## 18. 安全与失败处理
 
-- `RETRYABLE`: transient Bailian errors, read-only MCP timeouts, and transient database failures.
-- `NEED_HUMAN`: insufficient evidence, missing knowledge, stale preconditions, unknown write outcome, or failed verification.
-- `TERMINAL`: invalid parameters, authorization failure, invalid approval, plan hash mismatch, forbidden action, or schema-invalid tool result.
+### 18.1 错误分类
 
-Read-only transient calls use exponential backoff with jitter and at most two retries. Write calls are never blindly retried. An unknown write result is reconciled through its idempotency key before another decision.
+- `RETRYABLE`：百炼临时错误、只读 MCP 超时、临时数据库连接错误。
+- `NEED_HUMAN`：证据不足、知识缺失、现场前置条件变化、写操作结果未知、恢复验证失败。
+- `TERMINAL`：参数非法、越权、审批无效、计划哈希不一致、动作不在白名单、工具输出不符合 Schema。
 
-### 18.2 Execution gates
+只读临时错误使用指数退避和随机抖动，最多重试两次。
 
-Before rollback, the Executor validates:
+写操作禁止盲目重试。写操作结果未知时，必须先按幂等键查询执行状态。
+
+### 18.2 执行安全门
+
+回滚前按顺序校验：
 
 ```text
-action allowlist
-→ environment policy
-→ ActionPlan hash
-→ approver role and approval validity
-→ expected current release
-→ target release allowlist
-→ concurrent release absence
-→ idempotency state
+动作白名单
+→ 环境策略
+→ ActionPlan 哈希
+→ approver 角色和审批有效性
+→ 预期当前版本
+→ 目标版本白名单
+→ 不存在并发发布
+→ 幂等状态
 ```
 
-Failure stops execution and records an audit event. The Executor cannot ask an LLM to invent a new operation.
+任何一步失败都停止执行并记录审计事件。Executor 禁止请求大模型临时发明新操作。
 
-### 18.3 Untrusted content
+### 18.3 不可信内容
 
-Alert annotations, logs, MCP results, and document content are untrusted data. They cannot change system instructions, tool permissions, project scope, approval requirements, or action allowlists. Sensitive values are redacted before model submission. Raw large logs remain in the source system; Graph state stores bounded summaries and references.
+告警 annotations、日志、MCP 结果和 RAG 文档都属于不可信数据。
 
-## 19. Observability
+这些内容不能修改：
 
-V1 requires:
+- 系统指令。
+- 工具权限。
+- 项目范围。
+- 审批要求。
+- 动作白名单。
 
-- JSON structured logs.
-- `incident_id`, `graph_run_id`, `agent_name`, `tool_call_id`, and `job_id` correlation fields.
-- Prometheus application metrics.
-- Database-backed `audit_events` as the UI timeline source.
+敏感数据在发送给模型前必须脱敏。大段原始日志保留在来源系统中，Graph 只保存有界摘要和来源引用。
 
-Optional LangSmith tracing may be enabled for development but is not required for system operation.
+## 19. 系统可观测性
 
-Core metrics include received and deduplicated alerts, created Incidents, Agent run duration, model calls, MCP call duration, approval wait, recovery executions, and verification failures.
+V1 必须实现：
 
-## 20. Feature-First Verification
+- JSON 结构化日志。
+- `incident_id`、`graph_run_id`、`agent_name`、`tool_call_id`、`job_id` 等关联字段。
+- Prometheus 应用指标。
+- PostgreSQL `audit_events`，作为 UI 时间线事实来源。
 
-Comprehensive automated testing is intentionally deferred to V1.1. V1 completion is demonstrated by a manual end-to-end acceptance run:
+开发阶段可以选择开启 LangSmith，但系统不能依赖 LangSmith 才能运行。
 
-1. Start the Podman environment.
-2. Create and log in as a valid user.
-3. Start healthy demo release `v1`.
-4. Deploy faulty release `v2`.
-5. Confirm traffic produces a Prometheus error-rate alert.
-6. Confirm Alert Hub preserves, normalizes, and deduplicates the alert.
-7. Confirm one Incident is created.
-8. Confirm Supervisor coordinates Investigation and Knowledge.
-9. Confirm MCP supplies metrics, logs, and release facts.
-10. Confirm Milvus returns the approved post-deployment regression SOP with citations.
-11. Confirm Remediation Planner produces a rollback ActionPlan.
-12. Confirm the Graph stops at human approval and no rollback has occurred.
-13. Log in as an `approver` and approve the exact plan hash.
-14. Confirm Recovery Executor calls the host Recovery MCP once.
-15. Confirm the demo service returns to `v1`.
-16. Confirm Verification observes recovered metrics.
-17. Confirm the Incident reaches `RESOLVED` and the UI timeline is complete.
+核心指标包括：
 
-## 21. Architecture Decision Summary
+```text
+alerts_received_total
+alerts_deduplicated_total
+incidents_created_total
+agent_runs_total
+agent_run_duration_seconds
+llm_calls_total
+mcp_calls_total
+mcp_call_duration_seconds
+approval_wait_seconds
+recovery_executions_total
+verification_failures_total
+```
 
-| Area | Selected approach | Primary reason |
+## 20. 功能优先的人工验收
+
+完整自动化测试推迟到 V1.1。V1 通过以下人工端到端过程证明功能闭环：
+
+1. 启动 Podman 环境。
+2. 创建用户并成功登录。
+3. 启动健康版本 `v1`。
+4. 发布故障版本 `v2`。
+5. 确认流量触发 Prometheus 错误率告警。
+6. 确认 Alert Hub 保存、标准化和去重告警。
+7. 确认只创建一个 Incident。
+8. 确认 Supervisor 调用 Investigation Agent 和 Knowledge Agent。
+9. 确认 MCP 返回指标、日志和发布事实。
+10. 确认 Milvus 返回已审核、带引用的发布异常 SOP。
+11. 确认 Remediation Planner 生成回滚 ActionPlan。
+12. 确认 Graph 停在人工审批节点，并且尚未发生回滚。
+13. 使用 `approver` 用户批准对应计划哈希。
+14. 确认 Recovery Executor 只调用一次宿主机 Recovery MCP。
+15. 确认演示服务恢复到 `v1`。
+16. 确认 Verification 观察到恢复后的指标。
+17. 确认 Incident 进入 `RESOLVED`，控制台时间线和审计记录完整。
+
+## 21. 关键选型汇总
+
+| 领域 | 最终选择 | 主要理由 |
 |---|---|---|
-| Incident orchestration | Deterministic Graph + controlled Supervisor | Flexible investigation with predictable side effects |
-| Alert identity and basic grouping | Deterministic rules | Idempotency, availability, auditability |
-| Retrieval | Milvus dense + BM25 | Semantic text plus exact operational identifiers |
-| Skill trigger | Rule-filtered candidates + Supervisor choice | Bounded context with semantic flexibility |
-| Tool integration | Multiple narrow MCP servers | Privilege isolation and stable contracts |
-| Recovery | Deterministic Executor + host Recovery MCP | Real rollback without exposing Podman socket to an Agent container |
-| Container runtime | Podman Compose | Local multi-container readability and Podman-only environment |
-| Background jobs | Celery + Redis | Durable separation of web requests and Agent runs without Kafka |
-| Database | PostgreSQL + SQLAlchemy + Alembic | Transactions, relationships, migrations, auditability |
-| Authentication | Local password + JWT + RBAC | Real approval identity without Keycloak overhead |
-| Realtime UI | REST commands + SSE updates | Predominantly one-way Incident events |
-| Memory | None in V1 | Keep the first release focused on the operational loop |
-| Quality strategy | Manual acceptance in V1 | Feature-first delivery; automated quality system moves to V1.1 |
+| Incident 编排 | 确定性 Graph + 受控 Supervisor | 调查灵活，同时保证副作用可预测 |
+| 告警身份与基础聚合 | 确定性规则 | 幂等、可用、可审计 |
+| RAG | Milvus Dense + BM25 | 同时覆盖语义文本和精确技术标识符 |
+| Skill 触发 | 规则筛选候选 + Supervisor 选择 | 控制上下文，同时保留语义判断 |
+| 工具集成 | 多个窄接口 MCP Server | 权限隔离和稳定契约 |
+| 故障恢复 | 确定性 Executor + 宿主机 Recovery MCP | 不向 Agent 容器暴露 Podman Socket |
+| 容器运行时 | Podman Compose | 符合本机环境，便于管理多容器 |
+| 后台任务 | Celery + Redis | 不引入 Kafka 的情况下分离 API 和 Agent Worker |
+| 数据库 | PostgreSQL + SQLAlchemy + Alembic | 事务、关联、迁移和审计 |
+| 用户认证 | 本地密码 + JWT + RBAC | 不部署 Keycloak也能形成真实审批身份 |
+| 前端实时更新 | REST 命令 + SSE 推送 | Incident 更新以单向事件为主 |
+| 记忆系统 | V1 不实现 | 聚焦首个运维闭环 |
+| 质量策略 | V1 人工验收 | 功能优先，自动化质量体系放到 V1.1 |
