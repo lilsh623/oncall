@@ -1,0 +1,12 @@
+route:
+  receiver: oncall-api
+  group_by: [alertname, project_id, environment, service]
+  group_wait: 5s
+  group_interval: 30s
+  repeat_interval: 4h
+
+receivers:
+  - name: oncall-api
+    webhook_configs:
+      - url: http://api:8000/api/v1/webhooks/alertmanager/demo-shop
+        send_resolved: true
