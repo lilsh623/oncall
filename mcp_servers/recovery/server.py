@@ -1,0 +1,122 @@
+"""Recovery MCP exposing only the approved rollback_release write tool."""
+
+from __future__ import annotations
+
+import hmac
+import time
+from hashlib import sha256
+from typing import Literal
+from uuid import UUID
+
+import uvicorn
+from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+
+from mcp_servers.common import BearerAuthMiddleware
+from mcp_servers.recovery.podman_runner import rollback_release as run_rollback_release
+
+
+DEMO_SECRET = "demo-only-recovery-mcp-secret"
+_NONCES: set[str] = set()
+
+
+class ServerSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    app_env: Literal["local", "production"] = "local"
+    recovery_mcp_secret: SecretStr = Field(default=SecretStr(DEMO_SECRET), min_length=16)
+
+    @model_validator(mode="after")
+    def reject_demo_production_secret(self) -> "ServerSettings":
+        if self.app_env == "production" and self.recovery_mcp_secret.get_secret_value() == DEMO_SECRET:
+            raise ValueError("production requires a non-demo Recovery MCP secret")
+        return self
+
+
+SERVER_SETTINGS = ServerSettings()
+WRITE_TOOL = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+
+mcp = FastMCP(
+    "oncall-recovery",
+    instructions="Write-capable Recovery MCP. Only fixed rollback_release is exposed.",
+    stateless_http=True,
+    json_response=True,
+)
+
+
+class RollbackReleaseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: Literal["demo-shop"]
+    environment: Literal["staging"]
+    service: Literal["order-api"]
+    current_version: Literal["v2"]
+    target_version: Literal["v1"]
+    action_plan_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    approval_id: UUID
+    nonce: str = Field(min_length=16, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
+    issued_at: int
+    approval_proof: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+def _proof_payload(request: RollbackReleaseRequest) -> str:
+    return ":".join(
+        [
+            request.project_id,
+            request.environment,
+            request.service,
+            request.current_version,
+            request.target_version,
+            request.action_plan_hash,
+            str(request.approval_id),
+            request.nonce,
+            str(request.issued_at),
+        ]
+    )
+
+
+def verify_approval_proof(request: RollbackReleaseRequest, secret: str | None = None) -> None:
+    now = int(time.time())
+    if abs(now - request.issued_at) > 300:
+        raise ValueError("approval proof expired")
+    if request.nonce in _NONCES:
+        raise ValueError("approval proof nonce replayed")
+    key = (secret or SERVER_SETTINGS.recovery_mcp_secret.get_secret_value()).encode("utf-8")
+    expected = hmac.new(key, _proof_payload(request).encode("utf-8"), sha256).hexdigest()
+    if not hmac.compare_digest(expected, request.approval_proof):
+        raise ValueError("approval proof mismatch")
+    _NONCES.add(request.nonce)
+
+
+@mcp.tool(annotations=WRITE_TOOL, structured_output=True)
+def rollback_release(request: RollbackReleaseRequest) -> dict[str, object]:
+    """Validate approval proof and execute the fixed v2 -> v1 rollback."""
+
+    verify_approval_proof(request)
+    result = run_rollback_release(request.target_version)
+    return {"status": "succeeded" if result["returncode"] == 0 else "failed", "runner": result}
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health(_: Request) -> JSONResponse:
+    return JSONResponse({"status": "ok", "service": "oncall-recovery-mcp"})
+
+
+app = mcp.streamable_http_app()
+app.add_middleware(
+    BearerAuthMiddleware,
+    expected_token=SERVER_SETTINGS.recovery_mcp_secret.get_secret_value(),
+)
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="127.0.0.1", port=8080)

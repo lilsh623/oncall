@@ -10,12 +10,21 @@ from sqlalchemy import select
 
 from oncall.audit.service import append_audit_event
 from oncall.database import async_session, get_engine, get_session_factory
+from oncall.graph.contracts import IncidentGraphState
+from oncall.graph.incident import build_incident_graph
 from oncall.incidents.state import IncidentStatus, ensure_transition
 from oncall.jobs.celery_app import celery_app
-from oncall.models import Incident
+from oncall.models import ActionPlan, Incident
 
 
 _worker_loop: asyncio.AbstractEventLoop | None = None
+
+GRAPH_STATUS_PATH: tuple[IncidentStatus, ...] = (
+    IncidentStatus.INVESTIGATING,
+    IncidentStatus.DIAGNOSED,
+    IncidentStatus.PLANNING,
+    IncidentStatus.WAITING_APPROVAL,
+)
 
 
 def _run_in_worker_loop(
@@ -30,6 +39,7 @@ def _run_in_worker_loop(
 
 
 async def _start_incident(incident_id: UUID, checkpoint_version: int) -> dict[str, str | int]:
+    graph_input: IncidentGraphState | None = None
     async with async_session() as session:
         result = await session.execute(
             select(Incident).where(Incident.id == incident_id).with_for_update()
@@ -58,15 +68,97 @@ async def _start_incident(incident_id: UUID, checkpoint_version: int) -> dict[st
                 actor="celery:start_incident",
             )
             await session.commit()
-        status_value = (
-            incident.status.value
-            if isinstance(incident.status, IncidentStatus)
-            else str(incident.status)
-        )
+            graph_input = IncidentGraphState(
+                incident_id=str(incident.id),
+                status=target.value,
+                project_id=incident.project_id,
+                environment=incident.environment,
+                service=incident.service,
+                alert_summary=incident.summary or incident.title,
+                created_at=incident.opened_at,
+            )
+        if graph_input is None:
+            status_value = (
+                incident.status.value
+                if isinstance(incident.status, IncidentStatus)
+                else str(incident.status)
+            )
+            return {
+                "incident_id": str(incident_id),
+                "checkpoint_version": checkpoint_version,
+                "status": status_value,
+            }
+
+    if graph_input is None:
         return {
             "incident_id": str(incident_id),
             "checkpoint_version": checkpoint_version,
-            "status": status_value,
+            "status": "UNCHANGED",
+        }
+
+    graph_result = build_incident_graph(checkpointer=None).invoke(
+        graph_input.model_dump(mode="json")
+    )
+    graph_status = IncidentStatus(str(graph_result["status"]))
+    async with async_session() as session:
+        result = await session.execute(
+            select(Incident).where(Incident.id == incident_id).with_for_update()
+        )
+        incident = result.scalar_one_or_none()
+        if incident is None:
+            return {
+                "incident_id": str(incident_id),
+                "checkpoint_version": checkpoint_version,
+                "status": "NOT_FOUND",
+            }
+        previous = incident.status
+        plan_payload = graph_result.get("action_plan")
+        if isinstance(plan_payload, dict):
+            existing_plan = await session.execute(
+                select(ActionPlan).where(
+                    ActionPlan.incident_id == incident.id,
+                    ActionPlan.plan_hash == plan_payload["plan_hash"],
+                )
+            )
+            if existing_plan.scalar_one_or_none() is None:
+                session.add(
+                    ActionPlan(
+                        incident_id=incident.id,
+                        summary=plan_payload["summary"],
+                        risk_level=plan_payload["risk_level"],
+                        prerequisites=plan_payload["prerequisites"],
+                        rollback=plan_payload["rollback"],
+                        verification_criteria=plan_payload["verification_criteria"],
+                        plan_hash=plan_payload["plan_hash"],
+                        status="PENDING_APPROVAL",
+                    )
+                )
+        if previous != graph_status:
+            path = GRAPH_STATUS_PATH if graph_status == IncidentStatus.WAITING_APPROVAL else (graph_status,)
+            for target_status in path:
+                if incident.status == target_status:
+                    continue
+                step_previous = incident.status
+                incident.status = ensure_transition(step_previous, target_status)
+                await append_audit_event(
+                    session,
+                    incident.id,
+                    "incident.graph_completed",
+                    {
+                        "from": step_previous.value,
+                        "to": target_status.value,
+                        "checkpoint_version": checkpoint_version,
+                        "investigation_rounds": graph_result.get("investigation_rounds", 0),
+                        "model_call_count": graph_result.get("model_call_count", 0),
+                        "action_plan_hash": (graph_result.get("action_plan") or {}).get("plan_hash"),
+                    },
+                    actor="celery:start_incident",
+                )
+            await session.commit()
+        return {
+            "incident_id": str(incident_id),
+            "checkpoint_version": checkpoint_version,
+            "status": graph_status.value,
         }
 
 
