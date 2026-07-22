@@ -21,6 +21,8 @@ release-mcp: demo-runtime-init
 
 demo-runtime-init:
 	mkdir -p .runtime
+	mkdir -p .runtime/demo-logs
+	chmod 700 .runtime/demo-logs
 	test -f .runtime/demo-release.json || cp demo/release/demo-release.seed.json .runtime/demo-release.json
 	chmod 600 .runtime/demo-release.json
 

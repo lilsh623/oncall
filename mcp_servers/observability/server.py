@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import json
 import math
+import errno
+import os
 from datetime import datetime, timezone
 from pathlib import Path
+import re
+import stat
 from typing import Any, Literal
 
 import httpx
@@ -34,7 +38,17 @@ from oncall.mcp_gateway.schemas import (
 )
 
 
-LOG_PATH = Path(__file__).resolve().parents[2] / ".runtime" / "demo-service.log"
+LOG_DIRECTORY = Path(__file__).resolve().parents[2] / ".runtime" / "demo-logs"
+LOG_PATH = LOG_DIRECTORY / "demo-service.log"
+LOG_FILENAMES = (
+    "demo-service.log.3",
+    "demo-service.log.2",
+    "demo-service.log.1",
+    "demo-service.log",
+)
+MAX_LOG_FILE_SCAN_BYTES = 1_048_576
+MAX_LOG_TOTAL_SCAN_BYTES = MAX_LOG_FILE_SCAN_BYTES * len(LOG_FILENAMES)
+MAX_LOG_LINE_BYTES = 65_536
 DEMO_SECRET = "demo-only-observability-mcp-secret"
 
 
@@ -98,6 +112,71 @@ def _assert_scope(request: Any) -> None:
 
 def _retryable(message: str) -> RuntimeError:
     return RuntimeError(f"RETRYABLE: {message}")
+
+
+class UnsafeLogSource(RuntimeError):
+    """Raised when the fixed log directory contains an unsafe file type."""
+
+
+def _open_log_directory() -> int | None:
+    """Open the fixed directory without following runtime-controlled symlinks."""
+
+    runtime_directory = LOG_DIRECTORY.parent
+    for directory in (runtime_directory, LOG_DIRECTORY):
+        try:
+            metadata = os.lstat(directory)
+        except FileNotFoundError:
+            return None
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise UnsafeLogSource(f"unsafe log directory: {directory.name}")
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        directory_fd = os.open(LOG_DIRECTORY, flags)
+    except OSError as exc:
+        raise UnsafeLogSource("cannot safely open fixed demo log directory") from exc
+    if not stat.S_ISDIR(os.fstat(directory_fd).st_mode):
+        os.close(directory_fd)
+        raise UnsafeLogSource("fixed demo log path is not a directory")
+    return directory_fd
+
+
+def _open_regular_log(directory_fd: int, filename: str) -> int | None:
+    """Open one allowlisted basename relative to the already verified directory."""
+
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    try:
+        file_fd = os.open(filename, flags, dir_fd=directory_fd)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.EMLINK}:
+            raise UnsafeLogSource(f"symbolic log file rejected: {filename}") from exc
+        raise UnsafeLogSource(f"cannot safely open log file: {filename}") from exc
+    if not stat.S_ISREG(os.fstat(file_fd).st_mode):
+        os.close(file_fd)
+        raise UnsafeLogSource(f"non-regular log file rejected: {filename}")
+    return file_fd
+
+
+def _rotation_range_status(directory_fd: int) -> tuple[bool, bool]:
+    """Detect unsupported rotations without materializing an unbounded directory list."""
+
+    out_of_range = False
+    crowded_directory = False
+    with os.scandir(directory_fd) as entries:
+        for index, entry in enumerate(entries, start=1):
+            if index > 256:
+                crowded_directory = True
+                break
+            match = re.fullmatch(r"demo-service\.log\.(\d+)", entry.name)
+            if match and int(match.group(1)) >= 4:
+                out_of_range = True
+    return out_of_range, crowded_directory
 
 
 @mcp.tool(annotations=READ_ONLY, structured_output=True)
@@ -170,7 +249,8 @@ async def query_service_logs(request: QueryLogsRequest) -> LogsResult:
     """Read bounded local demo logs using only fixed level and time filters."""
 
     _assert_scope(request)
-    if not LOG_PATH.is_file():
+    directory_fd = _open_log_directory()
+    if directory_fd is None:
         return LogsResult(
             project_id=request.project_id,
             environment=request.environment,
@@ -181,53 +261,120 @@ async def query_service_logs(request: QueryLogsRequest) -> LogsResult:
             source_status="not_configured",
         )
 
-    entries: list[LogEntry] = []
-    returned_bytes = 0
+    matching_entries: list[LogEntry] = []
+    earliest_observed: datetime | None = None
+    opened_files = 0
+    total_scanned_bytes = 0
     truncated = False
+    oldest_rotation_present = False
     allowed_levels = set(request.levels)
-    scanned_bytes = 0
-    max_scan_bytes = 2 * 1024 * 1024
-    with LOG_PATH.open("rb") as log_file:
-        while scanned_bytes < max_scan_bytes:
-            remaining = max_scan_bytes - scanned_bytes
-            raw_line = log_file.readline(min(65_536, remaining + 1))
-            if not raw_line:
-                break
-            scanned_bytes += len(raw_line)
-            if scanned_bytes > max_scan_bytes:
+    try:
+        out_of_range_rotation, crowded_directory = _rotation_range_status(directory_fd)
+        truncated = out_of_range_rotation or crowded_directory
+        stop_scanning = False
+        for filename in LOG_FILENAMES:
+            if stop_scanning:
                 truncated = True
                 break
-            line = raw_line.decode("utf-8", "replace")
-            try:
-                item = json.loads(line)
-                timestamp = datetime.fromisoformat(
-                    str(item["timestamp"]).replace("Z", "+00:00")
-                )
-                if timestamp.tzinfo is None or timestamp.utcoffset() is None:
-                    timestamp = timestamp.replace(tzinfo=timezone.utc)
-                else:
-                    timestamp = timestamp.astimezone(timezone.utc)
-                level = str(item.get("level", "INFO")).upper()
-                entry = LogEntry(
-                    timestamp=timestamp,
-                    level=level,
-                    message=str(item.get("message", ""))[:2048],
-                    trace_id=item.get("trace_id"),
-                    status_code=item.get("status_code"),
-                    version=item.get("version"),
-                )
-            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            file_fd = _open_regular_log(directory_fd, filename)
+            if file_fd is None:
                 continue
-            if not request.start_time <= entry.timestamp <= request.end_time:
-                continue
-            if entry.level not in allowed_levels:
-                continue
-            encoded_size = len(entry.model_dump_json().encode("utf-8"))
-            if len(entries) >= request.limit or returned_bytes + encoded_size > 20_480:
+            opened_files += 1
+            oldest_rotation_present |= filename == "demo-service.log.3"
+            metadata = os.fstat(file_fd)
+            if metadata.st_size > MAX_LOG_FILE_SCAN_BYTES:
                 truncated = True
-                break
-            entries.append(entry)
-            returned_bytes += encoded_size
+            file_scanned_bytes = 0
+            discard_long_line = False
+            with os.fdopen(file_fd, "rb", closefd=True) as log_file:
+                while True:
+                    file_remaining = MAX_LOG_FILE_SCAN_BYTES - file_scanned_bytes
+                    total_remaining = MAX_LOG_TOTAL_SCAN_BYTES - total_scanned_bytes
+                    if file_remaining <= 0:
+                        if log_file.tell() < metadata.st_size:
+                            truncated = True
+                        break
+                    if total_remaining <= 0:
+                        if log_file.tell() < metadata.st_size:
+                            truncated = True
+                        stop_scanning = True
+                        break
+                    read_limit = min(MAX_LOG_LINE_BYTES, file_remaining, total_remaining)
+                    raw_line = log_file.readline(read_limit)
+                    if not raw_line:
+                        break
+                    file_scanned_bytes += len(raw_line)
+                    total_scanned_bytes += len(raw_line)
+
+                    complete_line = raw_line.endswith(b"\n") or log_file.tell() == metadata.st_size
+                    if discard_long_line:
+                        if raw_line.endswith(b"\n"):
+                            discard_long_line = False
+                        continue
+                    if not complete_line:
+                        truncated = True
+                        discard_long_line = True
+                        continue
+                    try:
+                        item = json.loads(raw_line)
+                        timestamp = datetime.fromisoformat(
+                            str(item["timestamp"]).replace("Z", "+00:00")
+                        )
+                        if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+                            timestamp = timestamp.replace(tzinfo=timezone.utc)
+                        else:
+                            timestamp = timestamp.astimezone(timezone.utc)
+                        entry = LogEntry(
+                            timestamp=timestamp,
+                            level=str(item.get("level", "INFO")).upper(),
+                            message=str(item.get("message", ""))[:2048],
+                            trace_id=item.get("trace_id"),
+                            status_code=item.get("status_code"),
+                            version=item.get("version"),
+                        )
+                    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                        continue
+                    if earliest_observed is None or entry.timestamp < earliest_observed:
+                        earliest_observed = entry.timestamp
+                    if not request.start_time <= entry.timestamp <= request.end_time:
+                        continue
+                    if entry.level not in allowed_levels:
+                        continue
+                    matching_entries.append(entry)
+    finally:
+        os.close(directory_fd)
+
+    if opened_files == 0:
+        return LogsResult(
+            project_id=request.project_id,
+            environment=request.environment,
+            service=request.service,
+            entries=[],
+            returned_bytes=0,
+            truncated=truncated,
+            source_status="not_configured",
+        )
+
+    matching_entries.sort(key=lambda entry: entry.timestamp)
+    selected_reversed: list[LogEntry] = []
+    returned_bytes = 0
+    for entry in reversed(matching_entries):
+        encoded_size = len(entry.model_dump_json().encode("utf-8"))
+        if len(selected_reversed) >= request.limit:
+            truncated = True
+            break
+        if returned_bytes + encoded_size > 20_480:
+            truncated = True
+            continue
+        selected_reversed.append(entry)
+        returned_bytes += encoded_size
+    entries = list(reversed(selected_reversed))
+    if len(entries) < len(matching_entries):
+        truncated = True
+    if oldest_rotation_present and (
+        earliest_observed is None or request.start_time < earliest_observed
+    ):
+        truncated = True
     return LogsResult(
         project_id=request.project_id,
         environment=request.environment,

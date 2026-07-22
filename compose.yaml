@@ -104,7 +104,7 @@ services:
     ports:
       - "127.0.0.1:18080:8080"
     volumes:
-      - ./.runtime:/runtime
+      - ./.runtime/demo-logs:/runtime
     healthcheck:
       test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8080/health')"]
       interval: 5s
