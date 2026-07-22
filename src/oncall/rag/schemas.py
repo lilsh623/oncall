@@ -35,6 +35,7 @@ class KnowledgeQuery(BaseModel):
     service: str | None = Field(default=None, max_length=128)
     environment: str | None = Field(default=None, max_length=64)
     document_type: str | None = Field(default=None, max_length=64)
+    version: str | None = Field(default=None, max_length=64)
     limit: int = Field(default=5, ge=1, le=5)
 
 

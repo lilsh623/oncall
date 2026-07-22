@@ -118,7 +118,20 @@ def chunk_markdown(
         for part_number, content in enumerate(_split_large_section(section.body, max_tokens, overlap_tokens), 1):
             section_path = " > ".join(section.path)
             identity = "\0".join(
-                (project_id, document_id, values["version"], source_path, section_path, str(part_number), content)
+                (
+                    project_id,
+                    document_id,
+                    values["document_type"],
+                    values["service"],
+                    values["environment"],
+                    title,
+                    values["version"],
+                    values["review_status"],
+                    source_path,
+                    section_path,
+                    str(part_number),
+                    content,
+                )
             )
             chunks.append(
                 KnowledgeChunk(

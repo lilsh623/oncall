@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -45,6 +45,20 @@ class Settings(BaseSettings):
     recovery_mcp_secret: SecretStr
     alertmanager_webhook_secrets: dict[str, SecretStr] = Field(default_factory=dict)
     alert_fingerprint_stable_labels: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_embedding_model_dimension(self) -> "Settings":
+        """Reject dimensions unsupported by the configured Bailian model."""
+
+        if self.bailian_embedding_model == "text-embedding-v4":
+            supported = {64, 128, 256, 512, 768, 1024, 1536, 2048}
+            if self.bailian_embedding_dimension not in supported:
+                raise ValueError(
+                    "text-embedding-v4 dimension must be one of "
+                    f"{sorted(supported)}; got {self.bailian_embedding_dimension}"
+                )
+        return self
+
 
 @lru_cache
 def get_settings() -> Settings:

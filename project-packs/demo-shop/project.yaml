@@ -2,7 +2,7 @@ project_id: demo-shop
 name: Demo Shop
 knowledge_defaults:
   document_type: sop
-  service: demo-service
-  environment: production
+  service: order-api
+  environment: staging
   version: 1.0.0
   review_status: approved

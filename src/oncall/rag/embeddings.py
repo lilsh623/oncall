@@ -36,6 +36,7 @@ class BailianEmbeddingProvider:
             base_url=base_url,
             model=model,
             dimensions=dimension,
+            chunk_size=10,
             check_embedding_ctx_length=False,
         )
 

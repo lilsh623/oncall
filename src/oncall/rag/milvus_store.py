@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Sequence
+from collections.abc import Iterable, Iterator, Sequence
+from typing import Any
 
 from pymilvus import AnnSearchRequest, DataType, Function, FunctionType, MilvusClient, RRFRanker
 
@@ -22,6 +23,7 @@ class MilvusKnowledgeStore:
         "source_path",
         "content",
     ]
+    _WRITE_BATCH_SIZE = 100
 
     def __init__(self, *, uri: str, collection_name: str, dimension: int) -> None:
         if dimension <= 0:
@@ -108,34 +110,87 @@ class MilvusKnowledgeStore:
             f"Milvus collection {self.collection_name!r} has no readable dense_vector dimension"
         )
 
-    def replace_project(self, chunks: Sequence[KnowledgeChunk], dense_vectors: Sequence[Sequence[float]]) -> int:
-        """Replace one project's rebuildable index after all vectors are ready."""
+    def _project_chunk_ids(self, project_id: str) -> set[str]:
+        iterator = self.client.query_iterator(
+            collection_name=self.collection_name,
+            batch_size=1000,
+            filter=f"project_id == {_literal(project_id)}",
+            output_fields=["chunk_id"],
+        )
+        chunk_ids: set[str] = set()
+        try:
+            while batch := iterator.next():
+                chunk_ids.update(str(row["chunk_id"]) for row in batch)
+        finally:
+            iterator.close()
+        return chunk_ids
 
-        if not chunks:
+    def _delete_ids(self, chunk_ids: Iterable[str]) -> None:
+        ids = list(chunk_ids)
+        for batch in _batches(ids, self._WRITE_BATCH_SIZE):
+            self.client.delete(collection_name=self.collection_name, ids=batch)
+
+    def replace_project(
+        self,
+        chunks: Iterable[KnowledgeChunk],
+        dense_vectors: Iterable[Sequence[float]],
+    ) -> int:
+        """Upsert a complete new snapshot before deleting stale project rows."""
+
+        chunk_list = list(chunks)
+        vector_list = list(dense_vectors)
+        if not chunk_list:
             raise ValueError("at least one knowledge chunk is required")
-        if len(chunks) != len(dense_vectors):
+        if len(chunk_list) != len(vector_list):
             raise ValueError("every chunk must have exactly one dense vector")
-        project_ids = {chunk.project_id for chunk in chunks}
+        project_ids = {chunk.project_id for chunk in chunk_list}
         if len(project_ids) != 1:
             raise ValueError("one import may only replace one project")
-        for vector in dense_vectors:
+        for vector in vector_list:
             if len(vector) != self.dimension:
                 raise EmbeddingDimensionError(
                     f"vector dimension {len(vector)} does not match collection dimension {self.dimension}"
                 )
 
         project_id = next(iter(project_ids))
-        self.client.delete(
-            collection_name=self.collection_name,
-            filter=f"project_id == {_literal(project_id)}",
-        )
         rows: list[dict[str, Any]] = []
-        for chunk, vector in zip(chunks, dense_vectors, strict=True):
+        for chunk, vector in zip(chunk_list, vector_list, strict=True):
             row = chunk.model_dump(mode="json")
             row["dense_vector"] = list(vector)
             rows.append(row)
-        result = self.client.insert(collection_name=self.collection_name, data=rows)
-        return int(result.get("insert_count", len(rows)))
+        new_ids = {row["chunk_id"] for row in rows}
+        if len(new_ids) != len(rows):
+            raise ValueError("knowledge import produced duplicate chunk IDs")
+
+        old_ids = self._project_chunk_ids(project_id)
+        attempted_new_ids: set[str] = set()
+        upserted = 0
+        try:
+            for batch in _batches(rows, self._WRITE_BATCH_SIZE):
+                attempted_new_ids.update(row["chunk_id"] for row in batch)
+                result = self.client.upsert(collection_name=self.collection_name, data=batch)
+                if "upsert_count" not in result:
+                    raise RuntimeError(f"Milvus upsert response omitted upsert_count: {result}")
+                count = int(result["upsert_count"])
+                if count != len(batch):
+                    raise RuntimeError(f"Milvus reported {count} upserts for a batch of {len(batch)}")
+                upserted += count
+            if upserted != len(rows):
+                raise RuntimeError(f"Milvus reported {upserted} upserts; expected {len(rows)}")
+            self.client.flush(collection_name=self.collection_name)
+        except Exception as error:
+            # Deterministic IDs let us remove only rows introduced by this failed
+            # attempt. Pre-existing rows remain available throughout the import.
+            try:
+                self._delete_ids(attempted_new_ids - old_ids)
+                self.client.flush(collection_name=self.collection_name)
+            except Exception as cleanup_error:  # pragma: no cover - best-effort recovery note
+                error.add_note(f"failed to clean partial Milvus upserts: {cleanup_error}")
+            raise
+
+        self._delete_ids(old_ids - new_ids)
+        self.client.flush(collection_name=self.collection_name)
+        return upserted
 
     def hybrid_search(self, query: KnowledgeQuery, dense_vector: Sequence[float]) -> list[KnowledgeCitation]:
         """Fuse dense semantic and BM25 keyword rankings using RRF."""
@@ -202,4 +257,13 @@ def _query_filter(query: KnowledgeQuery) -> str:
         clauses.append(f"environment == {_literal(query.environment)}")
     if query.document_type is not None:
         clauses.append(f"document_type == {_literal(query.document_type)}")
+    if query.version is not None:
+        clauses.append(f"version == {_literal(query.version)}")
     return " and ".join(clauses)
+
+
+def _batches(items: Sequence[Any], batch_size: int) -> Iterator[list[Any]]:
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    for start in range(0, len(items), batch_size):
+        yield list(items[start : start + batch_size])

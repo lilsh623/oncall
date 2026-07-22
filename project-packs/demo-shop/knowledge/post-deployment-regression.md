@@ -1,8 +1,8 @@
 ---
 document_id: demo-shop-post-deployment-regression
 document_type: sop
-service: demo-service
-environment: production
+service: order-api
+environment: staging
 title: 发布后回归与错误率升高处置 SOP
 version: 1.0.0
 review_status: approved
@@ -10,7 +10,7 @@ review_status: approved
 
 # 发布后回归与错误率升高处置 SOP
 
-本 SOP 用于 `demo-service` 生产发布后的快速回归，以及发布后 HTTP 5xx 错误率、超时率或关键业务失败率升高时的处置。执行人必须保留查询时间窗、发布版本和证据链接，不得仅凭单条日志回滚。
+本 SOP 用于 `order-api` 预发布环境（staging）发布后的快速回归，以及发布后 HTTP 5xx 错误率、超时率或关键业务失败率升高时的处置。执行人必须保留查询时间窗、发布版本和证据链接，不得仅凭单条日志回滚。
 
 ## 1. 发布变更核对
 
@@ -34,7 +34,7 @@ review_status: approved
 
 ## 3. 日志检查
 
-查询发布完成前后各十分钟的应用日志，先按 `service=demo-service`、`environment=production` 和 `release_version` 限定范围，再检查：
+查询发布完成前后各十分钟的应用日志，先按 `service=order-api`、`environment=staging` 和 `release_version` 限定范围，再检查：
 
 1. 新版本独有的 ERROR、exception、timeout、connection refused 和错误码；
 2. 失败请求的 trace_id，并沿调用链确认异常最早出现在哪个服务；
@@ -54,7 +54,7 @@ review_status: approved
 - 回滚不会覆盖发布后的用户数据，也不会破坏正在执行的批处理任务；
 - 当前容量足以承载回滚过程，依赖服务没有独立故障；
 - ActionPlan 已列出影响范围、风险、验证指标和失败后的人工接管方式；
-- 生产回滚已取得具备 approver 角色人员的明确审批。
+- staging 回滚已取得具备 approver 角色人员的明确审批。
 
 若证据不足、数据库变更不可逆、目标版本未知或现场版本已经变化，禁止自动执行，转人工继续诊断。
 
