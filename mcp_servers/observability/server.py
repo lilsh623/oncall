@@ -6,6 +6,7 @@ import json
 import math
 import errno
 import os
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 import re
@@ -118,6 +119,13 @@ class UnsafeLogSource(RuntimeError):
     """Raised when the fixed log directory contains an unsafe file type."""
 
 
+@dataclass(frozen=True)
+class LogFileSnapshot:
+    filename: str
+    fd: int
+    metadata: os.stat_result
+
+
 def _open_log_directory() -> int | None:
     """Open the fixed directory without following runtime-controlled symlinks."""
 
@@ -177,6 +185,54 @@ def _rotation_range_status(directory_fd: int) -> tuple[bool, bool]:
             if match and int(match.group(1)) >= 4:
                 out_of_range = True
     return out_of_range, crowded_directory
+
+
+def _rotation_inode_snapshot(directory_fd: int) -> dict[str, tuple[int, int]]:
+    """Capture allowlisted names without following runtime-controlled links."""
+
+    snapshot: dict[str, tuple[int, int]] = {}
+    for filename in LOG_FILENAMES:
+        try:
+            metadata = os.stat(filename, dir_fd=directory_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise UnsafeLogSource(f"cannot safely stat log file: {filename}") from exc
+        if not stat.S_ISREG(metadata.st_mode):
+            raise UnsafeLogSource(f"non-regular log file rejected: {filename}")
+        snapshot[filename] = (metadata.st_dev, metadata.st_ino)
+    return snapshot
+
+
+def _snapshot_log_files(directory_fd: int) -> tuple[list[LogFileSnapshot], bool]:
+    """Open all allowlisted log files before reading to bound rotation races."""
+
+    snapshots: list[LogFileSnapshot] = []
+    truncated = False
+    try:
+        before_snapshot = _rotation_inode_snapshot(directory_fd)
+        for filename in LOG_FILENAMES:
+            file_fd = _open_regular_log(directory_fd, filename)
+            if file_fd is None:
+                continue
+            after_open = os.fstat(file_fd)
+            expected_inode = before_snapshot.get(filename)
+            if expected_inode is None or expected_inode != (
+                after_open.st_dev,
+                after_open.st_ino,
+            ):
+                truncated = True
+            snapshots.append(LogFileSnapshot(filename, file_fd, after_open))
+        # After every descriptor is open, later rotations cannot invalidate the
+        # captured files. A changed name->inode map means rotation happened while
+        # taking the snapshot, so results remain bounded but must be marked partial.
+        if _rotation_inode_snapshot(directory_fd) != before_snapshot:
+            truncated = True
+    except Exception:
+        for snapshot in snapshots:
+            os.close(snapshot.fd)
+        raise
+    return snapshots, truncated
 
 
 @mcp.tool(annotations=READ_ONLY, structured_output=True)
@@ -271,22 +327,22 @@ async def query_service_logs(request: QueryLogsRequest) -> LogsResult:
     try:
         out_of_range_rotation, crowded_directory = _rotation_range_status(directory_fd)
         truncated = out_of_range_rotation or crowded_directory
+        log_snapshots, snapshot_truncated = _snapshot_log_files(directory_fd)
+        truncated = truncated or snapshot_truncated
         stop_scanning = False
-        for filename in LOG_FILENAMES:
+        for snapshot in log_snapshots:
             if stop_scanning:
                 truncated = True
-                break
-            file_fd = _open_regular_log(directory_fd, filename)
-            if file_fd is None:
+                os.close(snapshot.fd)
                 continue
             opened_files += 1
-            oldest_rotation_present |= filename == "demo-service.log.3"
-            metadata = os.fstat(file_fd)
+            oldest_rotation_present |= snapshot.filename == "demo-service.log.3"
+            metadata = snapshot.metadata
             if metadata.st_size > MAX_LOG_FILE_SCAN_BYTES:
                 truncated = True
             file_scanned_bytes = 0
             discard_long_line = False
-            with os.fdopen(file_fd, "rb", closefd=True) as log_file:
+            with os.fdopen(snapshot.fd, "rb", closefd=True) as log_file:
                 while True:
                     file_remaining = MAX_LOG_FILE_SCAN_BYTES - file_scanned_bytes
                     total_remaining = MAX_LOG_TOTAL_SCAN_BYTES - total_scanned_bytes
