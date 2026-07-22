@@ -42,7 +42,7 @@ services:
     volumes:
       - etcd-data:/etcd
     healthcheck:
-      test: ["CMD-SHELL", "ETCDCTL_API=3 etcdctl endpoint health"]
+      test: ["CMD", "etcdctl", "endpoint", "health"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -98,7 +98,7 @@ services:
     image: localhost/oncall-demo:1.0.0
     container_name: oncall-demo-service
     environment:
-      DEMO_VERSION: v1
+      DEMO_VERSION: ${DEMO_VERSION:-v1}
       DEMO_FAILURE_RATE: "1.0"
     ports:
       - "127.0.0.1:18080:8080"
