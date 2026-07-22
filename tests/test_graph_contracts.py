@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -52,7 +53,7 @@ class GraphContractsTest(unittest.TestCase):
             alert_summary="HighErrorRate after release v2",
             created_at=datetime.now(timezone.utc),
         )
-        result = graph.invoke(state.model_dump(mode="json"))
+        result = asyncio.run(graph.ainvoke(state.model_dump(mode="json")))
         self.assertEqual(result["status"], "WAITING_APPROVAL")
         self.assertTrue(result["evidence"])
         self.assertTrue(result["knowledge_citations"])

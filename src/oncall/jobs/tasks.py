@@ -1,20 +1,23 @@
 """Celery tasks that start or resume deterministic Incident processing."""
 
 import asyncio
+from contextlib import asynccontextmanager
 from collections.abc import Coroutine
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from celery.signals import worker_process_shutdown
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from sqlalchemy import select
 
 from oncall.audit.service import append_audit_event
+from oncall.config import get_settings
 from oncall.database import async_session, get_engine, get_session_factory
 from oncall.graph.contracts import IncidentGraphState
 from oncall.graph.incident import build_incident_graph
 from oncall.incidents.state import IncidentStatus, ensure_transition
 from oncall.jobs.celery_app import celery_app
-from oncall.models import ActionPlan, Incident
+from oncall.models import ActionPlan, ActionStep, Evidence, Hypothesis, Incident, KnowledgeCitation
 
 
 _worker_loop: asyncio.AbstractEventLoop | None = None
@@ -25,6 +28,148 @@ GRAPH_STATUS_PATH: tuple[IncidentStatus, ...] = (
     IncidentStatus.PLANNING,
     IncidentStatus.WAITING_APPROVAL,
 )
+
+
+def _checkpoint_dsn(database_url: str) -> str:
+    """Translate SQLAlchemy's asyncpg URL to the psycopg URL LangGraph expects."""
+
+    return database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+
+
+@asynccontextmanager
+async def _graph_checkpointer():
+    """Open the durable PostgreSQL checkpointer used across approval interrupts."""
+
+    dsn = _checkpoint_dsn(get_settings().database_url)
+    async with AsyncPostgresSaver.from_conn_string(dsn) as checkpointer:
+        await checkpointer.setup()
+        yield checkpointer
+
+
+async def _run_live_graph(graph_input: IncidentGraphState) -> dict[str, Any]:
+    """Run only the real MCP/RAG/Bailian graph and persist its interrupt state."""
+
+    async with _graph_checkpointer() as checkpointer:
+        graph = build_incident_graph(checkpointer=checkpointer, live_mode=True)
+        return await graph.ainvoke(
+            graph_input.model_dump(mode="json"),
+            config={"configurable": {"thread_id": graph_input.graph_run_id}},
+        )
+
+
+async def _persist_graph_findings(
+    session: Any,
+    incident: Incident,
+    graph_result: dict[str, Any],
+) -> ActionPlan | None:
+    """Persist bounded graph outputs so APIs never need to expose model history."""
+
+    for item in graph_result.get("evidence", []):
+        if not isinstance(item, dict):
+            continue
+        exists = await session.scalar(
+            select(Evidence.id).where(
+                Evidence.incident_id == incident.id,
+                Evidence.source_ref == item.get("source_ref"),
+                Evidence.observation == item.get("observation"),
+            )
+        )
+        if exists is None:
+            session.add(
+                Evidence(
+                    incident_id=incident.id,
+                    source_type=str(item.get("source_type", "system")),
+                    source_ref=str(item.get("source_ref", "unknown")),
+                    observation=str(item.get("observation", "")),
+                    payload=item.get("payload") if isinstance(item.get("payload"), dict) else {},
+                )
+            )
+    for item in graph_result.get("hypotheses", []):
+        if not isinstance(item, dict):
+            continue
+        exists = await session.scalar(
+            select(Hypothesis.id).where(
+                Hypothesis.incident_id == incident.id,
+                Hypothesis.description == item.get("description"),
+            )
+        )
+        if exists is None:
+            session.add(
+                Hypothesis(
+                    incident_id=incident.id,
+                    description=str(item.get("description", "")),
+                    confidence=item.get("confidence"),
+                    supporting_summary=item.get("supporting_summary"),
+                    opposing_summary=item.get("opposing_summary"),
+                    next_check=item.get("next_check"),
+                )
+            )
+    for item in graph_result.get("knowledge_citations", []):
+        if not isinstance(item, dict):
+            continue
+        exists = await session.scalar(
+            select(KnowledgeCitation.id).where(
+                KnowledgeCitation.incident_id == incident.id,
+                KnowledgeCitation.document_id == item.get("document_id"),
+                KnowledgeCitation.locator == item.get("locator"),
+            )
+        )
+        if exists is None:
+            session.add(
+                KnowledgeCitation(
+                    incident_id=incident.id,
+                    document_id=str(item.get("document_id", "unknown")),
+                    document_version=item.get("document_version"),
+                    section=item.get("section"),
+                    file_path=item.get("file_path"),
+                    locator=item.get("locator"),
+                    excerpt=item.get("excerpt"),
+                    score=item.get("score"),
+                )
+            )
+
+    plan_payload = graph_result.get("action_plan")
+    if not isinstance(plan_payload, dict):
+        return None
+    plan = await session.scalar(
+        select(ActionPlan).where(
+            ActionPlan.incident_id == incident.id,
+            ActionPlan.plan_hash == plan_payload["plan_hash"],
+        )
+    )
+    if plan is not None:
+        return plan
+    latest_version = await session.scalar(
+        select(ActionPlan.version)
+        .where(ActionPlan.incident_id == incident.id)
+        .order_by(ActionPlan.version.desc())
+        .limit(1)
+    )
+    plan = ActionPlan(
+        incident_id=incident.id,
+        version=(latest_version or 0) + 1,
+        summary=plan_payload["summary"],
+        risk_level=plan_payload["risk_level"],
+        prerequisites=plan_payload["prerequisites"],
+        rollback=plan_payload["rollback"],
+        verification_criteria=plan_payload["verification_criteria"],
+        plan_hash=plan_payload["plan_hash"],
+        status="PENDING_APPROVAL",
+    )
+    session.add(plan)
+    await session.flush()
+    session.add(
+        ActionStep(
+            action_plan_id=plan.id,
+            sequence=1,
+            name="Rollback the approved release",
+            tool_name="rollback_release",
+            tool_arguments=plan.rollback,
+            risk_level=plan.risk_level,
+            expected_result="order-api runs the approved target version",
+        )
+    )
+    return plan
 
 
 def _run_in_worker_loop(
@@ -70,6 +215,7 @@ async def _start_incident(incident_id: UUID, checkpoint_version: int) -> dict[st
             await session.commit()
             graph_input = IncidentGraphState(
                 incident_id=str(incident.id),
+                graph_run_id=f"incident:{incident.id}:{uuid4()}",
                 status=target.value,
                 project_id=incident.project_id,
                 environment=incident.environment,
@@ -96,9 +242,15 @@ async def _start_incident(incident_id: UUID, checkpoint_version: int) -> dict[st
             "status": "UNCHANGED",
         }
 
-    graph_result = build_incident_graph(checkpointer=None).invoke(
-        graph_input.model_dump(mode="json")
-    )
+    try:
+        graph_result = await _run_live_graph(graph_input)
+    except Exception:
+        graph_result = {
+            "status": IncidentStatus.NEED_HUMAN.value,
+            "need_human_reason": "The durable incident graph could not start safely.",
+            "investigation_rounds": 0,
+            "model_call_count": 0,
+        }
     graph_status = IncidentStatus(str(graph_result["status"]))
     async with async_session() as session:
         result = await session.execute(
@@ -112,27 +264,7 @@ async def _start_incident(incident_id: UUID, checkpoint_version: int) -> dict[st
                 "status": "NOT_FOUND",
             }
         previous = incident.status
-        plan_payload = graph_result.get("action_plan")
-        if isinstance(plan_payload, dict):
-            existing_plan = await session.execute(
-                select(ActionPlan).where(
-                    ActionPlan.incident_id == incident.id,
-                    ActionPlan.plan_hash == plan_payload["plan_hash"],
-                )
-            )
-            if existing_plan.scalar_one_or_none() is None:
-                session.add(
-                    ActionPlan(
-                        incident_id=incident.id,
-                        summary=plan_payload["summary"],
-                        risk_level=plan_payload["risk_level"],
-                        prerequisites=plan_payload["prerequisites"],
-                        rollback=plan_payload["rollback"],
-                        verification_criteria=plan_payload["verification_criteria"],
-                        plan_hash=plan_payload["plan_hash"],
-                        status="PENDING_APPROVAL",
-                    )
-                )
+        plan = await _persist_graph_findings(session, incident, graph_result)
         if previous != graph_status:
             path = GRAPH_STATUS_PATH if graph_status == IncidentStatus.WAITING_APPROVAL else (graph_status,)
             for target_status in path:
@@ -150,11 +282,12 @@ async def _start_incident(incident_id: UUID, checkpoint_version: int) -> dict[st
                         "checkpoint_version": checkpoint_version,
                         "investigation_rounds": graph_result.get("investigation_rounds", 0),
                         "model_call_count": graph_result.get("model_call_count", 0),
-                        "action_plan_hash": (graph_result.get("action_plan") or {}).get("plan_hash"),
+                        "action_plan_hash": plan.plan_hash if plan is not None else None,
+                        "need_human_reason": graph_result.get("need_human_reason"),
                     },
                     actor="celery:start_incident",
                 )
-            await session.commit()
+        await session.commit()
         return {
             "incident_id": str(incident_id),
             "checkpoint_version": checkpoint_version,

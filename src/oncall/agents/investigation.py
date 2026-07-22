@@ -39,6 +39,7 @@ async def run_investigation_agent(
                 tool_name,
                 arguments,
                 incident_id=state.incident_id,
+                graph_run_id=state.graph_run_id,
                 agent_name="investigation",
             )
             evidence.append(
@@ -72,11 +73,11 @@ async def run_investigation_agent(
         supporting_summary="V1 demo scenario focuses on post-deployment HighErrorRate regressions.",
         next_check="Confirm SOP guidance and rollback target before remediation planning.",
     )
-    return {"evidence": evidence, "hypotheses": [hypothesis], "model_call_count": 1}
+    return {"evidence": evidence, "hypotheses": [hypothesis], "model_call_count": 0}
 
 
-def run_stub_investigation(state: IncidentGraphState) -> dict[str, Any]:
-    """Offline deterministic fallback for contract tests and no-network smoke runs."""
+def run_demo_investigation(state: IncidentGraphState) -> dict[str, Any]:
+    """Explicit offline fixture used only by deterministic contract tests."""
 
     evidence = EvidenceItem(
         source_type="mcp",
@@ -90,4 +91,4 @@ def run_stub_investigation(state: IncidentGraphState) -> dict[str, Any]:
         supporting_summary="Alert summary and demo release evidence point to v2.",
         next_check="Use SOP to validate rollback criteria.",
     )
-    return {"evidence": [evidence], "hypotheses": [hypothesis], "model_call_count": 1}
+    return {"evidence": [evidence], "hypotheses": [hypothesis], "model_call_count": 0}

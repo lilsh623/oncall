@@ -9,7 +9,11 @@ from oncall.rag.schemas import KnowledgeQuery
 from oncall.rag.service import search_knowledge
 
 
-def run_knowledge_agent(state: IncidentGraphState) -> dict[str, Any]:
+def run_knowledge_agent(
+    state: IncidentGraphState,
+    *,
+    allow_offline_fallback: bool = False,
+) -> dict[str, Any]:
     """Retrieve approved runbook/SOP citations without tool write access."""
 
     query_text = f"{state.alert_summary} post deployment regression rollback SOP"
@@ -31,7 +35,7 @@ def run_knowledge_agent(state: IncidentGraphState) -> dict[str, Any]:
         )
         for item in citations[:5]
     ]
-    if not converted:
+    if not converted and allow_offline_fallback:
         converted.append(
             KnowledgeCitationDraft(
                 document_id="demo-shop-post-deployment-regression-sop",
@@ -43,4 +47,4 @@ def run_knowledge_agent(state: IncidentGraphState) -> dict[str, Any]:
                 score=0.0,
             )
         )
-    return {"knowledge_citations": converted, "model_call_count": 1}
+    return {"knowledge_citations": converted, "model_call_count": 0}
