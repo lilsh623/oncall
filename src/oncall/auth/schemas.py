@@ -7,7 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-UserRole = Literal["viewer", "approver", "admin"]
+UserRole = Literal["viewer", "operator", "approver", "admin"]
 
 
 class UserSummary(BaseModel):

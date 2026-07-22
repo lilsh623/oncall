@@ -1,10 +1,11 @@
 """Admin-only local user management API."""
 
+from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,12 +13,13 @@ from oncall.audit.service import append_audit_event
 from oncall.auth.dependencies import get_db_session, require_roles
 from oncall.auth.passwords import hash_password
 from oncall.auth.schemas import UserCreateRequest, UserResponse, UserUpdateRequest
-from oncall.models import User
+from oncall.models import RefreshToken, User
 
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 AdminUser = Annotated[User, Depends(require_roles("admin"))]
 DatabaseSession = Annotated[AsyncSession, Depends(get_db_session)]
+_ADMIN_INVARIANT_LOCK_ID = 0x4F4E43414C4C
 
 
 @router.get("/users", response_model=list[UserResponse])
@@ -60,7 +62,13 @@ async def update_user(
 ) -> User:
     """Change a user's role or active state while preserving an active administrator."""
 
-    user = await session.get(User, user_id)
+    await session.execute(select(func.pg_advisory_xact_lock(_ADMIN_INVARIANT_LOCK_ID)))
+    user = await session.scalar(
+        select(User)
+        .where(User.id == user_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
 
@@ -70,16 +78,27 @@ async def update_user(
         and ((payload.role is not None and payload.role != "admin") or payload.is_active is False)
     )
     if removes_active_admin:
-        count_result = await session.execute(
-            select(func.count()).select_from(User).where(User.role == "admin", User.is_active.is_(True))
+        active_admins = await session.execute(
+            select(User.id)
+            .where(User.role == "admin", User.is_active.is_(True))
+            .with_for_update()
         )
-        if int(count_result.scalar_one()) <= 1:
+        if len(active_admins.scalars().all()) <= 1:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="不能禁用或降级当前唯一的启用状态 admin",
             )
 
     before = {"role": user.role, "is_active": user.is_active}
+    if payload.is_active is False:
+        await session.execute(
+            update(RefreshToken)
+            .where(
+                RefreshToken.user_id == user.id,
+                RefreshToken.revoked_at.is_(None),
+            )
+            .values(revoked_at=datetime.now(UTC))
+        )
     if payload.role is not None:
         user.role = payload.role
     if payload.is_active is not None:

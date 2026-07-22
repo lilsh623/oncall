@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     app_env: Literal["local", "production"] = "local"
     database_url: str
     redis_url: str
-    jwt_secret: SecretStr
+    jwt_secret: SecretStr = Field(min_length=32)
     bailian_api_key: SecretStr
     bailian_base_url: str
     bailian_chat_model: str

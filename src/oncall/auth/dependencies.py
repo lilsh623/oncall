@@ -15,11 +15,12 @@ from oncall.models import User
 
 
 _bearer_scheme = HTTPBearer(auto_error=False)
-_UNAUTHORIZED = HTTPException(
-    status_code=status.HTTP_401_UNAUTHORIZED,
-    detail="认证凭据无效或已过期",
-    headers={"WWW-Authenticate": "Bearer"},
-)
+def _unauthorized() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="认证凭据无效或已过期",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 async def get_db_session() -> AsyncIterator[AsyncSession]:
@@ -36,18 +37,18 @@ async def get_current_user(
     """Load an active user after verifying their bearer JWT."""
 
     if credentials is None or credentials.scheme.lower() != "bearer":
-        raise _UNAUTHORIZED
+        raise _unauthorized()
     try:
         claims = decode_access_token(credentials.credentials)
         user_id = UUID(str(claims["sub"]))
     except (InvalidAccessToken, KeyError, ValueError):
-        raise _UNAUTHORIZED
+        raise _unauthorized()
 
     user = await session.get(User, user_id)
     if user is None or not user.is_active:
-        raise _UNAUTHORIZED
-    if user.role not in {"viewer", "approver", "admin"}:
-        raise _UNAUTHORIZED
+        raise _unauthorized()
+    if user.role not in {"viewer", "operator", "approver", "admin"}:
+        raise _unauthorized()
     return user
 
 
