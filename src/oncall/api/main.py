@@ -12,6 +12,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from oncall.auth.admin_router import router as admin_router
 from oncall.auth.router import router as auth_router
+from oncall.alerts.router import router as alerts_router
 from oncall.logging import configure_logging
 
 
@@ -79,6 +80,7 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestContextMiddleware)
     app.include_router(auth_router)
     app.include_router(admin_router)
+    app.include_router(alerts_router)
 
     @app.get("/health/live")
     async def live() -> dict[str, str]:

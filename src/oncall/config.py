@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     milvus_uri: str
     recovery_mcp_url: str
     recovery_mcp_secret: SecretStr
+    alertmanager_webhook_secrets: dict[str, SecretStr] = Field(default_factory=dict)
+    alert_fingerprint_stable_labels: tuple[str, ...] = ()
 
 
 @lru_cache

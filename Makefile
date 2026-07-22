@@ -2,13 +2,16 @@ PYTHON ?= python
 API_HOST ?= 0.0.0.0
 API_PORT ?= 8000
 
-.PHONY: install api infra-up infra-ps infra-down demo-healthy demo-fail
+.PHONY: install api worker infra-up infra-ps infra-down demo-healthy demo-fail
 
 install:
 	$(PYTHON) -m pip install -e ".[dev]"
 
 api:
 	$(PYTHON) -m uvicorn oncall.api.main:create_app --factory --reload --host $(API_HOST) --port $(API_PORT)
+
+worker:
+	$(PYTHON) -m celery -A oncall.jobs.celery_app:celery_app worker --loglevel=INFO
 
 infra-up:
 	$(PYTHON) -m podman_compose up -d postgres redis etcd minio milvus demo-service prometheus alertmanager traffic-generator
