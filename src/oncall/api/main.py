@@ -14,6 +14,7 @@ from oncall.auth.admin_router import router as admin_router
 from oncall.auth.router import router as auth_router
 from oncall.alerts.router import router as alerts_router
 from oncall.logging import configure_logging
+from oncall.skills.registry import get_skill_registry
 
 
 HTTP_REQUESTS_TOTAL = Counter(
@@ -67,6 +68,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Configure application services around the FastAPI lifespan."""
 
     configure_logging()
+    get_skill_registry().load()
     logger = structlog.get_logger(__name__)
     logger.info("application_started")
     yield
