@@ -10,6 +10,8 @@ from fastapi import FastAPI, Request, Response
 from prometheus_client import Counter, Histogram
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from oncall.auth.admin_router import router as admin_router
+from oncall.auth.router import router as auth_router
 from oncall.logging import configure_logging
 
 
@@ -75,6 +77,8 @@ def create_app() -> FastAPI:
 
     app = FastAPI(title="OnCall API", lifespan=lifespan)
     app.add_middleware(RequestContextMiddleware)
+    app.include_router(auth_router)
+    app.include_router(admin_router)
 
     @app.get("/health/live")
     async def live() -> dict[str, str]:
