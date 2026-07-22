@@ -34,12 +34,13 @@ class Settings(BaseSettings):
     bailian_api_key: SecretStr
     bailian_base_url: str
     bailian_chat_model: str
-    bailian_embedding_model: str
+    bailian_embedding_model: str = Field(min_length=1, max_length=256)
     bailian_embedding_dimension: int = Field(default=1024, gt=0, le=32768)
     milvus_uri: str
     milvus_knowledge_collection: str = Field(
         default="oncall_operational_knowledge",
-        pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,254}$",
+        # Reserve ten characters for the companion ``__manifest`` collection.
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,244}$",
     )
     recovery_mcp_url: str
     recovery_mcp_secret: SecretStr

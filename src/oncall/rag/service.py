@@ -50,9 +50,12 @@ def _runtime(
             uri=config.milvus_uri,
             collection_name=config.milvus_knowledge_collection,
             dimension=embedding.dimension,
+            embedding_model=embedding.model_id,
         )
     if knowledge_store.dimension != embedding.dimension:
         raise ValueError("embedding provider and Milvus store dimensions must match")
+    if knowledge_store.embedding_model != embedding.model_id:
+        raise ValueError("embedding provider and Milvus store model IDs must match")
     return embedding, knowledge_store
 
 
@@ -272,4 +275,6 @@ def search_knowledge(
         store=store,
     )
     knowledge_store.ensure_collection()
+    if knowledge_store.preflight_search(query.project_id) is None:
+        return []
     return knowledge_store.hybrid_search(query, embedding.embed_query(query.text))

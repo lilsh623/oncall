@@ -21,6 +21,9 @@ class EmbeddingProvider(Protocol):
     @property
     def dimension(self) -> int: ...
 
+    @property
+    def model_id(self) -> str: ...
+
     def embed_documents(self, texts: Sequence[str]) -> list[list[float]]: ...
 
     def embed_query(self, text: str) -> list[float]: ...
@@ -31,6 +34,7 @@ class BailianEmbeddingProvider:
 
     def __init__(self, *, api_key: str, base_url: str, model: str, dimension: int) -> None:
         self._dimension = dimension
+        self._model_id = model
         self._client = OpenAIEmbeddings(
             api_key=api_key,
             base_url=base_url,
@@ -43,6 +47,10 @@ class BailianEmbeddingProvider:
     @property
     def dimension(self) -> int:
         return self._dimension
+
+    @property
+    def model_id(self) -> str:
+        return self._model_id
 
     def _validate(self, vectors: Sequence[Sequence[float]]) -> list[list[float]]:
         result = [list(vector) for vector in vectors]
@@ -72,6 +80,10 @@ class DeterministicEmbeddingProvider:
     def dimension(self) -> int:
         return self._dimension
 
+    @property
+    def model_id(self) -> str:
+        return "oncall-deterministic-sha256-v1"
+
     def _embed(self, text: str) -> list[float]:
         vector = [0.0] * self.dimension
         tokens = _TOKEN_FOR_EMBEDDING.findall(text.lower())
@@ -90,5 +102,6 @@ class DeterministicEmbeddingProvider:
 
     def embed_query(self, text: str) -> list[float]:
         return self._embed(text)
+
 
 _TOKEN_FOR_EMBEDDING = re.compile(r"[\u3400-\u9fff]|[a-z0-9_./:@+-]+", re.UNICODE)
