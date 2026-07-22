@@ -8,5 +8,5 @@ route:
 receivers:
   - name: oncall-api
     webhook_configs:
-      - url: http://api:8000/api/v1/webhooks/alertmanager/demo-shop
+      - url: http://host.containers.internal:8000/api/v1/webhooks/alertmanager/demo-shop
         send_resolved: true

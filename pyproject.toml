@@ -29,6 +29,11 @@ dependencies = [
     "PyYAML",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "podman-compose>=1.6,<2",
+]
+
 [project.scripts]
 oncall = "oncall.cli.app:app"
 

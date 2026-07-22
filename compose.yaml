@@ -1,34 +1,4 @@
 services:
-  api:
-    build:
-      context: .
-      dockerfile: containers/api.Containerfile
-    image: localhost/oncall-api:1.0.0
-    container_name: oncall-api
-    environment:
-      APP_ENV: local
-      DATABASE_URL: postgresql+asyncpg://oncall:oncall@postgres:5432/oncall
-      REDIS_URL: redis://redis:6379/0
-      JWT_SECRET: development-only-secret
-      BAILIAN_API_KEY: development-only-key
-      BAILIAN_BASE_URL: https://dashscope.aliyuncs.com/compatible-mode/v1
-      BAILIAN_CHAT_MODEL: qwen-plus
-      BAILIAN_EMBEDDING_MODEL: text-embedding-v4
-      MILVUS_URI: http://milvus:19530
-      RECOVERY_MCP_URL: http://host.containers.internal:8080
-      RECOVERY_MCP_SECRET: development-only-secret
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health/live')"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-      start_period: 10s
-
   postgres:
     image: postgres:16.8-alpine
     container_name: oncall-postgres
@@ -173,9 +143,6 @@ services:
     volumes:
       - ./demo/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager-data:/alertmanager
-    depends_on:
-      api:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9093/-/healthy"]
       interval: 10s

@@ -1,10 +1,21 @@
-.PHONY: venv install api
+PYTHON ?= python
+
+.PHONY: venv install api infra-up infra-ps infra-down
 
 venv:
 	python3 -m venv .venv
 
 install:
-	.venv/bin/pip install -e .
+	$(PYTHON) -m pip install -e ".[dev]"
 
 api:
-	.venv/bin/uvicorn oncall.api.main:create_app --factory --reload --port 8000
+	$(PYTHON) -m uvicorn oncall.api.main:create_app --factory --reload --port 8000
+
+infra-up:
+	$(PYTHON) -m podman_compose up -d postgres redis etcd minio milvus demo-service prometheus alertmanager traffic-generator
+
+infra-ps:
+	$(PYTHON) -m podman_compose ps
+
+infra-down:
+	$(PYTHON) -m podman_compose down
