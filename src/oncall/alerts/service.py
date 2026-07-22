@@ -10,6 +10,7 @@ from oncall.alerts.correlation import advisory_lock_key
 from oncall.alerts.schemas import AlertEnvelope, AlertIngestionCommand, IngestionResult
 from oncall.audit.service import append_audit_event
 from oncall.incidents.service import (
+    find_latest_linked_incident,
     find_linked_open_incident,
     get_or_create_incident,
     link_alert_to_incident,
@@ -21,8 +22,10 @@ class AlertIdentityConflict(ValueError):
     """Raised when one source fingerprint is reused for different core facts."""
 
 
-async def _lock_alert_identity(session: AsyncSession, source: str, fingerprint: str) -> None:
-    lock_key = advisory_lock_key("alert-identity", source, fingerprint)
+async def _lock_alert_identity(
+    session: AsyncSession, source: str, project_id: str, fingerprint: str
+) -> None:
+    lock_key = advisory_lock_key("alert-identity", source, project_id, fingerprint)
     await session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
 
 
@@ -34,10 +37,13 @@ async def _upsert_alert(
 ) -> tuple[Alert, bool, str | None]:
     """Serialize one identity and return alert, was-duplicate and previous status."""
 
-    await _lock_alert_identity(session, envelope.source, envelope.fingerprint)
+    await _lock_alert_identity(
+        session, envelope.source, envelope.project_id, envelope.fingerprint
+    )
     result = await session.execute(
         select(Alert).where(
             Alert.source == envelope.source,
+            Alert.project_id == envelope.project_id,
             Alert.fingerprint == envelope.fingerprint,
         )
     )
@@ -65,9 +71,8 @@ async def _upsert_alert(
         await session.flush()
         return alert, False, None
 
-    identity = (alert.project_id, alert.environment, alert.service, alert.alert_name)
+    identity = (alert.environment, alert.service, alert.alert_name)
     incoming_identity = (
-        envelope.project_id,
         envelope.environment,
         envelope.service,
         envelope.alert_name,
@@ -76,19 +81,11 @@ async def _upsert_alert(
         raise AlertIdentityConflict("source fingerprint conflicts with an existing alert")
 
     previous_status = alert.status
-    alert.raw_event_id = raw_event.id
-    alert.project_id = envelope.project_id
-    alert.environment = envelope.environment
-    alert.service = envelope.service
-    alert.alert_name = envelope.alert_name
-    alert.severity = envelope.severity
-    alert.status = envelope.status
-    alert.correlation_key = envelope.correlation_key
-    alert.labels = envelope.labels
-    alert.annotations = envelope.annotations
-    alert.starts_at = envelope.starts_at
-    alert.ends_at = envelope.ends_at
-    alert.last_seen = received_at
+    # The identity lock serializes duplicates. Ignore stale delivery state so an
+    # older webhook cannot move last_seen backwards or revert firing/resolved.
+    if received_at >= alert.last_seen:
+        alert.status = envelope.status
+        alert.last_seen = received_at
     alert.occurrence_count += 1
     await session.flush()
     return alert, True, previous_status
@@ -132,21 +129,25 @@ async def ingest_alerts(
         deduplicated += int(duplicate)
 
         incident = await find_linked_open_incident(session, alert.id)
-        if envelope.status == "firing" and incident is None:
-            incident, _ = await get_or_create_incident(session, alert, received_at)
+        if alert.status == "firing" and incident is None:
+            incident, _ = await get_or_create_incident(session, alert)
             await link_alert_to_incident(session, incident, alert)
 
         if incident is not None:
             incident_ids.add(incident.id)
-            if previous_status is not None and previous_status != envelope.status:
+        audit_incident = incident
+        if previous_status is not None and previous_status != alert.status:
+            if audit_incident is None:
+                audit_incident = await find_latest_linked_incident(session, alert.id)
+            if audit_incident is not None:
                 await append_audit_event(
                     session,
-                    incident.id,
+                    audit_incident.id,
                     "alert.status_changed",
                     {
                         "alert_id": str(alert.id),
                         "from": previous_status,
-                        "to": envelope.status,
+                        "to": alert.status,
                     },
                     actor="alert-hub",
                 )

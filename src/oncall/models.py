@@ -84,7 +84,14 @@ class RawAlertEvent(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
 
 class Alert(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
     __tablename__ = "alerts"
-    __table_args__ = (UniqueConstraint("source", "fingerprint", name="uq_alerts_source_fingerprint"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "source",
+            "project_id",
+            "fingerprint",
+            name="uq_alerts_source_project_fingerprint",
+        ),
+    )
 
     raw_event_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("raw_alert_events.id", ondelete="SET NULL"), index=True

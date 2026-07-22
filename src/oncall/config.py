@@ -7,14 +7,25 @@ from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+ENV_FILE_CONFIG = SettingsConfigDict(
+    env_file=".env",
+    env_file_encoding="utf-8",
+    extra="ignore",
+)
+
+
+class BrokerSettings(BaseSettings):
+    """Worker bootstrap settings that do not require unrelated app secrets."""
+
+    model_config = ENV_FILE_CONFIG
+
+    redis_url: str = "redis://127.0.0.1:16379/0"
+
+
 class Settings(BaseSettings):
     """Strongly typed runtime configuration for the OnCall service."""
 
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
+    model_config = ENV_FILE_CONFIG
 
     app_env: Literal["local", "production"] = "local"
     database_url: str
@@ -36,3 +47,10 @@ def get_settings() -> Settings:
     """Return the cached application settings instance."""
 
     return Settings()
+
+
+@lru_cache
+def get_broker_settings() -> BrokerSettings:
+    """Return Redis bootstrap settings using the same `.env` contract as the API."""
+
+    return BrokerSettings()

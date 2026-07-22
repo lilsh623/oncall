@@ -1,9 +1,8 @@
 """Persistence operations for deterministic Incident aggregation."""
 
-from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -49,10 +48,24 @@ async def find_linked_open_incident(
     return result.scalar_one_or_none()
 
 
+async def find_latest_linked_incident(
+    session: AsyncSession, alert_id: UUID
+) -> Incident | None:
+    """Return the newest Incident linked to an alert, including terminal ones."""
+
+    result = await session.execute(
+        select(Incident)
+        .join(IncidentAlert, IncidentAlert.incident_id == Incident.id)
+        .where(IncidentAlert.alert_id == alert_id)
+        .order_by(Incident.opened_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
 async def get_or_create_incident(
     session: AsyncSession,
     alert: Alert,
-    received_at: datetime,
 ) -> tuple[Incident, bool]:
     """Aggregate into a matching five-minute open Incident, or create one."""
 
@@ -61,7 +74,12 @@ async def get_or_create_incident(
         return existing_link, False
 
     await _lock_correlation_group(session, alert)
-    window_start = received_at - INCIDENT_CORRELATION_WINDOW
+    # Read database wall-clock time after acquiring the group lock. Request-local
+    # timestamps can be ordered differently from lock acquisition under load.
+    correlation_time = await session.scalar(select(func.clock_timestamp()))
+    if correlation_time is None:  # pragma: no cover - PostgreSQL always returns it
+        raise RuntimeError("database did not return a correlation timestamp")
+    window_start = correlation_time - INCIDENT_CORRELATION_WINDOW
     result = await session.execute(
         select(Incident)
         .where(
@@ -71,7 +89,7 @@ async def get_or_create_incident(
             Incident.correlation_key == alert.correlation_key,
             Incident.status.in_(OPEN_INCIDENT_STATUSES),
             Incident.opened_at >= window_start,
-            Incident.opened_at <= received_at,
+            Incident.opened_at <= correlation_time,
         )
         .order_by(Incident.opened_at.desc())
         .limit(1)
@@ -88,7 +106,7 @@ async def get_or_create_incident(
         service=alert.service,
         correlation_key=alert.correlation_key,
         summary=alert.annotations.get("summary"),
-        opened_at=received_at,
+        opened_at=correlation_time,
     )
     session.add(incident)
     await session.flush()
