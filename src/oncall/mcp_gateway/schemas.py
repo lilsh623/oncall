@@ -88,6 +88,11 @@ class LogEntry(StrictModel):
     level: LogLevel
     message: str = Field(max_length=2048)
     trace_id: str | None = Field(default=None, max_length=128)
+    status_code: int | None = Field(default=None, ge=100, le=599)
+    version: str | None = Field(
+        default=None,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+    )
 
 
 class LogsResult(StrictModel):

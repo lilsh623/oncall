@@ -2,8 +2,40 @@
 
 from __future__ import annotations
 
-import hmac
 from collections.abc import Callable
+import hmac
+import json
+from typing import Any
+
+import httpx
+
+
+class BoundedJsonError(ValueError):
+    """Raised when an upstream JSON body is invalid or exceeds its contract."""
+
+
+async def get_bounded_json(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    max_bytes: int,
+    params: dict[str, Any] | None = None,
+) -> Any:
+    """Stream decoded bytes, enforce a limit, then parse JSON exactly once."""
+
+    if max_bytes < 1:
+        raise ValueError("max_bytes must be positive")
+    body = bytearray()
+    async with client.stream("GET", url, params=params) as response:
+        response.raise_for_status()
+        async for chunk in response.aiter_bytes():
+            if len(body) + len(chunk) > max_bytes:
+                raise BoundedJsonError("upstream JSON response exceeds its byte limit")
+            body.extend(chunk)
+    try:
+        return json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BoundedJsonError("upstream response is not valid JSON") from exc
 
 
 class BearerAuthMiddleware:

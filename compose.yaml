@@ -100,8 +100,11 @@ services:
     environment:
       DEMO_VERSION: ${DEMO_VERSION:-v1}
       DEMO_FAILURE_RATE: "1.0"
+      DEMO_LOG_PATH: /runtime/demo-service.log
     ports:
       - "127.0.0.1:18080:8080"
+    volumes:
+      - ./.runtime:/runtime
     healthcheck:
       test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8080/health')"]
       interval: 5s

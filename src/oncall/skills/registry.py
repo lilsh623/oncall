@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fnmatch import fnmatchcase
 from functools import lru_cache
+import os
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -21,7 +22,12 @@ class SkillRegistry:
     """Load Git-managed Skills and prefilter candidates without an LLM."""
 
     def __init__(self, project_packs_root: Path | None = None) -> None:
-        self._root = project_packs_root or Path(__file__).resolve().parents[3] / "project-packs"
+        configured_root = os.getenv("ONCALL_PROJECT_PACKS_ROOT")
+        self._root = project_packs_root or (
+            Path(configured_root)
+            if configured_root
+            else Path(__file__).resolve().parents[3] / "project-packs"
+        )
         self._skills: tuple[SkillDefinition, ...] = ()
 
     @property
@@ -31,9 +37,15 @@ class SkillRegistry:
     def load(self) -> tuple[SkillDefinition, ...]:
         """Validate every manifest and atomically publish the loaded registry."""
 
+        if not self._root.is_dir():
+            raise SkillRegistryError(f"project packs root does not exist: {self._root}")
+        manifest_paths = sorted(self._root.glob("*/skills/*/skill.yaml"))
+        if not manifest_paths:
+            raise SkillRegistryError(f"no Skill manifests found under {self._root}")
+
         loaded: list[SkillDefinition] = []
         identities: set[tuple[str, str]] = set()
-        for manifest_path in sorted(self._root.glob("*/skills/*/skill.yaml")):
+        for manifest_path in manifest_paths:
             project_id = manifest_path.parents[2].name
             instructions_path = manifest_path.with_name("instructions.md")
             if not instructions_path.is_file():
@@ -50,7 +62,12 @@ class SkillRegistry:
                     f"duplicate Skill name {manifest.name!r} for project {project_id!r}"
                 )
             identities.add(identity)
-            instructions = instructions_path.read_text(encoding="utf-8").strip()
+            try:
+                instructions = instructions_path.read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                raise SkillRegistryError(
+                    f"cannot read Skill instructions {instructions_path}: {exc}"
+                ) from exc
             loaded.append(
                 SkillDefinition(
                     **manifest.model_dump(by_alias=True),
@@ -60,6 +77,8 @@ class SkillRegistry:
                 )
             )
 
+        if not loaded:
+            raise SkillRegistryError(f"no valid Skills loaded from {self._root}")
         self._skills = tuple(loaded)
         return self._skills
 

@@ -4,7 +4,10 @@ WORKDIR /app
 
 COPY pyproject.toml ./
 COPY src ./src
+COPY project-packs ./project-packs
 RUN pip install --no-cache-dir .
+
+ENV ONCALL_PROJECT_PACKS_ROOT=/app/project-packs
 
 EXPOSE 8000
 

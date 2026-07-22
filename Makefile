@@ -22,8 +22,9 @@ release-mcp: demo-runtime-init
 demo-runtime-init:
 	mkdir -p .runtime
 	test -f .runtime/demo-release.json || cp demo/release/demo-release.seed.json .runtime/demo-release.json
+	chmod 600 .runtime/demo-release.json
 
-infra-up:
+infra-up: demo-runtime-init
 	$(PYTHON) -m podman_compose up -d postgres redis etcd minio milvus demo-service prometheus alertmanager traffic-generator
 
 infra-ps:
@@ -32,8 +33,10 @@ infra-ps:
 infra-down:
 	$(PYTHON) -m podman_compose down
 
-demo-healthy:
-	DEMO_VERSION=v1 $(PYTHON) -m podman_compose up -d --force-recreate demo-service traffic-generator
+demo-healthy: demo-runtime-init
+	DEMO_VERSION=v1 $(PYTHON) -m podman_compose up -d --build --force-recreate demo-service traffic-generator
+	$(PYTHON) -m oncall.cli demo-release sync --version v1
 
-demo-fail:
-	DEMO_VERSION=v2 $(PYTHON) -m podman_compose up -d --force-recreate demo-service traffic-generator
+demo-fail: demo-runtime-init
+	DEMO_VERSION=v2 $(PYTHON) -m podman_compose up -d --build --force-recreate demo-service traffic-generator
+	$(PYTHON) -m oncall.cli demo-release sync --version v2

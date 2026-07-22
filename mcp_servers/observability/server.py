@@ -17,7 +17,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from mcp_servers.common import BearerAuthMiddleware
+from mcp_servers.common import BearerAuthMiddleware, BoundedJsonError, get_bounded_json
 from oncall.mcp_gateway.schemas import (
     ActiveAlert,
     ActiveAlertsRequest,
@@ -120,8 +120,10 @@ async def query_metrics(request: QueryMetricsRequest) -> MetricsResult:
     step = max(1, math.ceil(duration / request.limit))
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(
+            payload = await get_bounded_json(
+                client,
                 f"{str(SERVER_SETTINGS.observability_prometheus_url).rstrip('/')}/api/v1/query_range",
+                max_bytes=524_288,
                 params={
                     "query": expressions[request.metric],
                     "start": request.start_time.timestamp(),
@@ -129,9 +131,7 @@ async def query_metrics(request: QueryMetricsRequest) -> MetricsResult:
                     "step": step,
                 },
             )
-            response.raise_for_status()
-            payload = response.json()
-    except (httpx.HTTPError, ValueError) as exc:
+    except (httpx.HTTPError, BoundedJsonError) as exc:
         raise _retryable("Prometheus query failed") from exc
     if payload.get("status") != "success":
         raise _retryable("Prometheus returned an unsuccessful response")
@@ -213,6 +213,8 @@ async def query_service_logs(request: QueryLogsRequest) -> LogsResult:
                     level=level,
                     message=str(item.get("message", ""))[:2048],
                     trace_id=item.get("trace_id"),
+                    status_code=item.get("status_code"),
+                    version=item.get("version"),
                 )
             except (KeyError, TypeError, ValueError, json.JSONDecodeError):
                 continue
@@ -270,12 +272,12 @@ async def get_active_alerts(request: ActiveAlertsRequest) -> ActiveAlertsResult:
     _assert_scope(request)
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(
-                f"{str(SERVER_SETTINGS.observability_alertmanager_url).rstrip('/')}/api/v2/alerts"
+            payload = await get_bounded_json(
+                client,
+                f"{str(SERVER_SETTINGS.observability_alertmanager_url).rstrip('/')}/api/v2/alerts",
+                max_bytes=262_144,
             )
-            response.raise_for_status()
-            payload = response.json()
-    except (httpx.HTTPError, ValueError) as exc:
+    except (httpx.HTTPError, BoundedJsonError) as exc:
         raise _retryable("Alertmanager query failed") from exc
 
     alerts: list[ActiveAlert] = []

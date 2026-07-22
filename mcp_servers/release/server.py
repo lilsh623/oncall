@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -67,10 +68,14 @@ mcp = FastMCP(
 
 def _load_scope(request: Any) -> dict[str, Any]:
     try:
-        if RELEASE_PATH.stat().st_size > 262_144:
+        with RELEASE_PATH.open("rb") as release_file:
+            if os.fstat(release_file.fileno()).st_size > 262_144:
+                raise ValueError("release state exceeds 256 KiB")
+            raw = release_file.read(262_145)
+        if len(raw) > 262_144:
             raise ValueError("release state exceeds 256 KiB")
-        payload = json.loads(RELEASE_PATH.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
+        payload = json.loads(raw)
+    except (OSError, ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise RuntimeError("NEED_HUMAN: release facts are unavailable") from exc
     scope = payload.get("scope", {})
     requested = (request.project_id, request.environment, request.service)
