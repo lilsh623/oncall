@@ -35,12 +35,16 @@ class Settings(BaseSettings):
     bailian_base_url: str
     bailian_chat_model: str
     bailian_embedding_model: str
+    bailian_embedding_dimension: int = Field(default=1024, gt=0, le=32768)
     milvus_uri: str
+    milvus_knowledge_collection: str = Field(
+        default="oncall_operational_knowledge",
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,254}$",
+    )
     recovery_mcp_url: str
     recovery_mcp_secret: SecretStr
     alertmanager_webhook_secrets: dict[str, SecretStr] = Field(default_factory=dict)
     alert_fingerprint_stable_labels: tuple[str, ...] = ()
-
 
 @lru_cache
 def get_settings() -> Settings:
