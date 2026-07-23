@@ -32,6 +32,7 @@ from oncall.models import (
     KnowledgeCitation,
     VerificationCheck,
 )
+from oncall.metrics import INCIDENT_GRAPH_RUNS, RECOVERY_EXECUTIONS, RECOVERY_VERIFICATION
 
 
 _worker_loop: asyncio.AbstractEventLoop | None = None
@@ -280,6 +281,7 @@ async def _start_incident(incident_id: UUID, checkpoint_version: int) -> dict[st
             "model_call_count": 0,
         }
     graph_status = IncidentStatus(str(graph_result["status"]))
+    INCIDENT_GRAPH_RUNS.labels(status=graph_status.value).inc()
     async with async_session() as session:
         result = await session.execute(
             select(Incident).where(Incident.id == incident_id).with_for_update()
@@ -412,6 +414,7 @@ async def _resume_incident(incident_id: UUID, plan_id: UUID) -> dict[str, str]:
         return {"incident_id": str(incident_id), "status": status_value}
 
     execution = await execute_approved_plan(incident_id, plan_id)
+    RECOVERY_EXECUTIONS.labels(status=execution.status).inc()
     if execution.status != "SUCCEEDED":
         status_value = await _mark_need_human(
             incident_id,
@@ -440,6 +443,7 @@ async def _resume_incident(incident_id: UUID, plan_id: UUID) -> dict[str, str]:
 
     # Verification intentionally happens after the EXECUTING -> VERIFYING commit.
     verification = await verify_recovery(plan.verification_criteria, incident=incident)
+    RECOVERY_VERIFICATION.labels(passed=str(verification.passed).lower()).inc()
     async with async_session() as session:
         incident = await session.scalar(
             select(Incident).where(Incident.id == incident_id).with_for_update()

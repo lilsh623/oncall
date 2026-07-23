@@ -163,6 +163,90 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  api:
+    build:
+      context: .
+      dockerfile: containers/api.Containerfile
+    image: localhost/oncall-api:1.0.0
+    container_name: oncall-api
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://oncall:oncall@postgres:5432/oncall
+      REDIS_URL: redis://redis:6379/0
+      MILVUS_URI: http://milvus:19530
+      OBSERVABILITY_MCP_URL: http://observability-mcp:8081/mcp
+      RELEASE_MCP_URL: http://release-mcp:8082/mcp
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      milvus: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health/ready')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    image: localhost/oncall-api:1.0.0
+    container_name: oncall-worker
+    command: ["python", "-m", "celery", "-A", "oncall.jobs.celery_app:celery_app", "worker", "--loglevel=INFO"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://oncall:oncall@postgres:5432/oncall
+      REDIS_URL: redis://redis:6379/0
+      MILVUS_URI: http://milvus:19530
+      OBSERVABILITY_MCP_URL: http://observability-mcp:8081/mcp
+      RELEASE_MCP_URL: http://release-mcp:8082/mcp
+    depends_on:
+      api: { condition: service_healthy }
+
+  observability-mcp:
+    image: localhost/oncall-api:1.0.0
+    container_name: oncall-observability-mcp
+    command: ["python", "-m", "uvicorn", "mcp_servers.observability.server:app", "--host", "0.0.0.0", "--port", "8081"]
+    env_file: .env
+    environment:
+      OBSERVABILITY_PROMETHEUS_URL: http://prometheus:9090
+      OBSERVABILITY_ALERTMANAGER_URL: http://alertmanager:9093
+      OBSERVABILITY_SERVICE_URL: http://demo-service:8080
+    volumes: ["./.runtime:/app/.runtime:ro"]
+    depends_on:
+      prometheus: { condition: service_healthy }
+      alertmanager: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8081/health/ready')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  release-mcp:
+    image: localhost/oncall-api:1.0.0
+    container_name: oncall-release-mcp
+    command: ["python", "-m", "uvicorn", "mcp_servers.release.server:app", "--host", "0.0.0.0", "--port", "8082"]
+    env_file: .env
+    volumes: ["./.runtime:/app/.runtime:ro"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8082/health/ready')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  frontend:
+    build:
+      context: .
+      dockerfile: containers/frontend.Containerfile
+    image: localhost/oncall-frontend:1.0.0
+    container_name: oncall-frontend
+    ports: ["127.0.0.1:5173:80"]
+    depends_on:
+      api: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
 volumes:
   postgres-data:
   redis-data:

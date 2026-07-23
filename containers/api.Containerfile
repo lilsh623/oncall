@@ -4,6 +4,9 @@ WORKDIR /app
 
 COPY pyproject.toml ./
 COPY src ./src
+COPY mcp_servers ./mcp_servers
+COPY migrations ./migrations
+COPY alembic.ini ./
 COPY project-packs ./project-packs
 RUN pip install --no-cache-dir .
 

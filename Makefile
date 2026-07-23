@@ -2,7 +2,7 @@ PYTHON ?= python
 API_HOST ?= 0.0.0.0
 API_PORT ?= 8000
 
-.PHONY: install api worker observability-mcp release-mcp demo-runtime-init infra-up infra-ps infra-down demo-healthy demo-fail
+.PHONY: install api worker observability-mcp release-mcp recovery-mcp demo-runtime-init infra-up app-up infra-ps infra-down down demo-healthy demo-fail demo-reset migrate
 
 install:
 	$(PYTHON) -m pip install -e ".[dev]"
@@ -19,6 +19,12 @@ observability-mcp:
 release-mcp: demo-runtime-init
 	$(PYTHON) -m uvicorn mcp_servers.release.server:app --host 127.0.0.1 --port 18082
 
+recovery-mcp: demo-runtime-init
+	$(PYTHON) -m uvicorn mcp_servers.recovery.server:app --host 127.0.0.1 --port 8080
+
+migrate:
+	$(PYTHON) -m alembic upgrade head
+
 demo-runtime-init:
 	mkdir -p .runtime
 	mkdir -p .runtime/demo-logs
@@ -29,10 +35,16 @@ demo-runtime-init:
 infra-up: demo-runtime-init
 	$(PYTHON) -m podman_compose up -d postgres redis etcd minio milvus demo-service prometheus alertmanager traffic-generator
 
+app-up: demo-runtime-init migrate
+	$(PYTHON) -m podman_compose up -d api worker observability-mcp release-mcp frontend
+
 infra-ps:
 	$(PYTHON) -m podman_compose ps
 
 infra-down:
+	$(PYTHON) -m podman_compose down
+
+down:
 	$(PYTHON) -m podman_compose down
 
 demo-healthy: demo-runtime-init
@@ -42,3 +54,5 @@ demo-healthy: demo-runtime-init
 demo-fail: demo-runtime-init
 	DEMO_VERSION=v2 $(PYTHON) -m podman_compose up -d --build --force-recreate demo-service traffic-generator
 	$(PYTHON) -m oncall.cli demo-release sync --version v2
+
+demo-reset: demo-healthy
