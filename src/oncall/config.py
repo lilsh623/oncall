@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     )
     recovery_mcp_url: str
     recovery_mcp_secret: SecretStr
+    recovery_approval_secret: SecretStr = Field(
+        default=SecretStr("demo-only-recovery-approval-secret"), min_length=16
+    )
+    recovery_verification_wait_seconds: float = Field(default=15.0, ge=0, le=120)
     alertmanager_webhook_secrets: dict[str, SecretStr] = Field(default_factory=dict)
     alert_fingerprint_stable_labels: tuple[str, ...] = ()
 
@@ -58,6 +62,17 @@ class Settings(BaseSettings):
                     "text-embedding-v4 dimension must be one of "
                     f"{sorted(supported)}; got {self.bailian_embedding_dimension}"
                 )
+        if (
+            self.recovery_mcp_secret.get_secret_value()
+            == self.recovery_approval_secret.get_secret_value()
+        ):
+            raise ValueError("Recovery transport and approval secrets must be independent")
+        if self.app_env == "production" and (
+            self.recovery_mcp_secret.get_secret_value() == "demo-only-recovery-mcp-secret"
+            or self.recovery_approval_secret.get_secret_value()
+            == "demo-only-recovery-approval-secret"
+        ):
+            raise ValueError("production requires non-demo Recovery MCP secrets")
         return self
 
 

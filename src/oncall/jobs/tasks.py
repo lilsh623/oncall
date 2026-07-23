@@ -3,21 +3,35 @@
 import asyncio
 from contextlib import asynccontextmanager
 from collections.abc import Coroutine
+from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from celery.signals import worker_process_shutdown
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.types import Command
 from sqlalchemy import select
 
 from oncall.audit.service import append_audit_event
 from oncall.config import get_settings
 from oncall.database import async_session, get_engine, get_session_factory
+from oncall.execution.service import execute_approved_plan
+from oncall.execution.verification import verify_recovery
 from oncall.graph.contracts import IncidentGraphState
 from oncall.graph.incident import build_incident_graph
 from oncall.incidents.state import IncidentStatus, ensure_transition
 from oncall.jobs.celery_app import celery_app
-from oncall.models import ActionPlan, ActionStep, Evidence, Hypothesis, Incident, KnowledgeCitation
+from oncall.models import (
+    ActionPlan,
+    ActionStep,
+    Approval,
+    Evidence,
+    Execution,
+    Hypothesis,
+    Incident,
+    KnowledgeCitation,
+    VerificationCheck,
+)
 
 
 _worker_loop: asyncio.AbstractEventLoop | None = None
@@ -46,14 +60,20 @@ async def _graph_checkpointer():
         yield checkpointer
 
 
-async def _run_live_graph(graph_input: IncidentGraphState) -> dict[str, Any]:
+async def _run_live_graph(
+    graph_input: IncidentGraphState | Command,
+    *,
+    graph_run_id: str,
+) -> dict[str, Any]:
     """Run only the real MCP/RAG/Bailian graph and persist its interrupt state."""
 
     async with _graph_checkpointer() as checkpointer:
         graph = build_incident_graph(checkpointer=checkpointer, live_mode=True)
         return await graph.ainvoke(
-            graph_input.model_dump(mode="json"),
-            config={"configurable": {"thread_id": graph_input.graph_run_id}},
+            graph_input.model_dump(mode="json")
+            if isinstance(graph_input, IncidentGraphState)
+            else graph_input,
+            config={"configurable": {"thread_id": graph_run_id}},
         )
 
 
@@ -137,7 +157,7 @@ async def _persist_graph_findings(
             ActionPlan.plan_hash == plan_payload["plan_hash"],
         )
     )
-    if plan is not None:
+    if plan is not None and plan.status == "PENDING_APPROVAL":
         return plan
     latest_version = await session.scalar(
         select(ActionPlan.version)
@@ -147,6 +167,7 @@ async def _persist_graph_findings(
     )
     plan = ActionPlan(
         incident_id=incident.id,
+        graph_run_id=str(graph_result.get("graph_run_id") or ""),
         version=(latest_version or 0) + 1,
         summary=plan_payload["summary"],
         risk_level=plan_payload["risk_level"],
@@ -197,25 +218,30 @@ async def _start_incident(incident_id: UUID, checkpoint_version: int) -> dict[st
                 "status": "NOT_FOUND",
             }
 
-        if incident.status == IncidentStatus.RECEIVED:
-            target = ensure_transition(incident.status, IncidentStatus.TRIAGING)
+        if incident.status in {IncidentStatus.RECEIVED, IncidentStatus.TRIAGING}:
+            target = (
+                ensure_transition(incident.status, IncidentStatus.TRIAGING)
+                if incident.status == IncidentStatus.RECEIVED
+                else IncidentStatus.TRIAGING
+            )
             previous = incident.status
             incident.status = target
-            await append_audit_event(
-                session,
-                incident.id,
-                "incident.status_changed",
-                {
-                    "from": previous.value,
-                    "to": target.value,
-                    "checkpoint_version": checkpoint_version,
-                },
-                actor="celery:start_incident",
-            )
+            if previous != target:
+                await append_audit_event(
+                    session,
+                    incident.id,
+                    "incident.status_changed",
+                    {
+                        "from": previous.value,
+                        "to": target.value,
+                        "checkpoint_version": checkpoint_version,
+                    },
+                    actor="celery:start_incident",
+                )
             await session.commit()
             graph_input = IncidentGraphState(
                 incident_id=str(incident.id),
-                graph_run_id=f"incident:{incident.id}:{uuid4()}",
+                graph_run_id=f"incident:{incident.id}:attempt:{checkpoint_version}",
                 status=target.value,
                 project_id=incident.project_id,
                 environment=incident.environment,
@@ -243,7 +269,9 @@ async def _start_incident(incident_id: UUID, checkpoint_version: int) -> dict[st
         }
 
     try:
-        graph_result = await _run_live_graph(graph_input)
+        graph_result = await _run_live_graph(
+            graph_input, graph_run_id=graph_input.graph_run_id or ""
+        )
     except Exception:
         graph_result = {
             "status": IncidentStatus.NEED_HUMAN.value,
@@ -302,6 +330,169 @@ def start_incident(incident_id: str, checkpoint_version: int) -> dict[str, str |
     if checkpoint_version < 1:
         raise ValueError("checkpoint_version must be positive")
     return _run_in_worker_loop(_start_incident(UUID(incident_id), checkpoint_version))
+
+
+async def _mark_need_human(incident_id: UUID, *, reason: str, actor: str) -> str:
+    async with async_session() as session:
+        incident = await session.scalar(
+            select(Incident).where(Incident.id == incident_id).with_for_update()
+        )
+        if incident is None:
+            return "NOT_FOUND"
+        if incident.status not in {IncidentStatus.NEED_HUMAN, IncidentStatus.RESOLVED, IncidentStatus.FAILED}:
+            previous = incident.status
+            incident.status = ensure_transition(previous, IncidentStatus.NEED_HUMAN)
+            await append_audit_event(
+                session,
+                incident.id,
+                "incident.execution_requires_human",
+                {"from": previous.value, "reason": reason},
+                actor=actor,
+            )
+            await session.commit()
+        return incident.status.value
+
+
+async def _resume_incident(incident_id: UUID, plan_id: UUID) -> dict[str, str]:
+    """Resume a durable approval interrupt, then run and verify one fixed plan."""
+
+    async with async_session() as session:
+        incident = await session.scalar(
+            select(Incident).where(Incident.id == incident_id).with_for_update()
+        )
+        plan = await session.scalar(
+            select(ActionPlan)
+            .where(ActionPlan.id == plan_id, ActionPlan.incident_id == incident_id)
+            .with_for_update()
+        )
+        if incident is None or plan is None:
+            return {"incident_id": str(incident_id), "status": "NOT_FOUND"}
+        approval = await session.scalar(
+            select(Approval)
+            .where(
+                Approval.action_plan_id == plan.id,
+                Approval.action_plan_hash == plan.plan_hash,
+                Approval.decision == "APPROVED",
+            )
+            .order_by(Approval.decided_at.desc())
+            .limit(1)
+        )
+        if (
+            incident.status != IncidentStatus.WAITING_APPROVAL
+            or plan.status != "APPROVED"
+            or approval is None
+            or not plan.graph_run_id
+        ):
+            return {"incident_id": str(incident_id), "status": incident.status.value}
+        graph_run_id = plan.graph_run_id
+        approval_payload = {
+            "decision": "APPROVED",
+            "approval_id": str(approval.id),
+            "action_plan_id": str(plan.id),
+            "action_plan_hash": plan.plan_hash,
+        }
+
+    try:
+        graph_result = await _run_live_graph(
+            Command(resume=approval_payload), graph_run_id=graph_run_id
+        )
+    except Exception:
+        status_value = await _mark_need_human(
+            incident_id,
+            reason="The persisted approval graph could not resume safely.",
+            actor="celery:resume_incident",
+        )
+        return {"incident_id": str(incident_id), "status": status_value}
+    if graph_result.get("status") != IncidentStatus.EXECUTING.value:
+        status_value = await _mark_need_human(
+            incident_id,
+            reason="The resumed graph did not enter the controlled execution state.",
+            actor="celery:resume_incident",
+        )
+        return {"incident_id": str(incident_id), "status": status_value}
+
+    execution = await execute_approved_plan(incident_id, plan_id)
+    if execution.status != "SUCCEEDED":
+        status_value = await _mark_need_human(
+            incident_id,
+            reason=execution.error or f"Recovery execution ended as {execution.status}.",
+            actor="celery:resume_incident",
+        )
+        return {"incident_id": str(incident_id), "status": status_value}
+
+    async with async_session() as session:
+        incident = await session.scalar(
+            select(Incident).where(Incident.id == incident_id).with_for_update()
+        )
+        plan = await session.get(ActionPlan, plan_id)
+        if incident is None or plan is None:
+            return {"incident_id": str(incident_id), "status": "NOT_FOUND"}
+        if incident.status == IncidentStatus.EXECUTING:
+            incident.status = ensure_transition(incident.status, IncidentStatus.VERIFYING)
+        await append_audit_event(
+            session,
+            incident.id,
+            "incident.recovery_executed",
+            {"execution_id": str(execution.execution_id), "action_plan_id": str(plan.id)},
+            actor="celery:resume_incident",
+        )
+        await session.commit()
+
+    # Verification intentionally happens after the EXECUTING -> VERIFYING commit.
+    verification = await verify_recovery(plan.verification_criteria, incident=incident)
+    async with async_session() as session:
+        incident = await session.scalar(
+            select(Incident).where(Incident.id == incident_id).with_for_update()
+        )
+        persisted_plan = await session.get(ActionPlan, plan_id)
+        execution_record = await session.get(Execution, execution.execution_id)
+        if incident is None or persisted_plan is None:
+            return {"incident_id": str(incident_id), "status": "NOT_FOUND"}
+        for check in verification.checks:
+            session.add(
+                VerificationCheck(
+                    incident_id=incident.id,
+                    execution_id=execution_record.id if execution_record is not None else None,
+                    name=str(check.get("name") or check.get("criterion") or "verification"),
+                    status=str(check.get("status", "unknown")).upper(),
+                    observed_value={key: value for key, value in check.items() if key not in {"name", "status", "criterion"}},
+                    conclusion="PASSED" if verification.passed else "FAILED",
+                    reason=verification.reason,
+                )
+            )
+        previous = incident.status
+        if verification.passed and incident.status == IncidentStatus.VERIFYING:
+            incident.status = ensure_transition(incident.status, IncidentStatus.RESOLVED)
+            incident.resolved_at = datetime.now(UTC)
+            persisted_plan.status = "EXECUTED"
+            event_type = "incident.resolved"
+        elif incident.status == IncidentStatus.VERIFYING:
+            incident.status = ensure_transition(incident.status, IncidentStatus.NEED_HUMAN)
+            event_type = "incident.verification_failed"
+        else:
+            event_type = "incident.verification_recorded"
+        await append_audit_event(
+            session,
+            incident.id,
+            event_type,
+            {
+                "from": previous.value,
+                "to": incident.status.value,
+                "execution_id": str(execution.execution_id),
+                "passed": verification.passed,
+                "reason": verification.reason,
+            },
+            actor="celery:resume_incident",
+        )
+        await session.commit()
+        return {"incident_id": str(incident_id), "status": incident.status.value}
+
+
+@celery_app.task(name="oncall.resume_incident")
+def resume_incident(incident_id: str, plan_id: str) -> dict[str, str]:
+    """Idempotently continue only a graph paused at an approved plan boundary."""
+
+    return _run_in_worker_loop(_resume_incident(UUID(incident_id), UUID(plan_id)))
 
 
 @worker_process_shutdown.connect

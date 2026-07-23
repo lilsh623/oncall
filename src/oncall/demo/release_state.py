@@ -30,6 +30,31 @@ class DemoReleaseSyncError(RuntimeError):
     """Raised before state mutation when the observed demo version is unsafe."""
 
 
+def current_recorded_version() -> DemoVersion:
+    """Return the fixed release fact after validating the demo scope and shape."""
+
+    payload = _read_release_state()
+    if payload.get("scope") != {
+        "project_id": "demo-shop",
+        "environment": "staging",
+        "service": "order-api",
+    }:
+        raise DemoReleaseSyncError("demo release state has an unexpected scope")
+    current = payload.get("current")
+    if not isinstance(current, dict):
+        raise DemoReleaseSyncError("demo release state has no current release")
+    try:
+        return DemoVersion(current.get("version"))
+    except ValueError as exc:
+        raise DemoReleaseSyncError("demo release state has an invalid current version") from exc
+
+
+def current_observed_version() -> DemoVersion:
+    """Read the fixed demo endpoint; callers cannot supply an arbitrary URL."""
+
+    return _fetch_observed_version()
+
+
 def _read_release_state() -> dict[str, Any]:
     try:
         with RELEASE_STATE_PATH.open("rb") as state_file:

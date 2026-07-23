@@ -216,6 +216,7 @@ class ActionPlan(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
     incident_id: Mapped[UUID] = mapped_column(
         ForeignKey("incidents.id", ondelete="CASCADE"), index=True
     )
+    graph_run_id: Mapped[str | None] = mapped_column(String(256), index=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     summary: Mapped[str] = mapped_column(Text)
     risk_level: Mapped[str] = mapped_column(String(32))

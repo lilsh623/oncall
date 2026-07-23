@@ -1,7 +1,8 @@
-"""Incident mutation routes for approval workflow."""
+"""Incident approval, rejection, and safe investigation-retry routes."""
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Annotated
 from uuid import UUID
 
@@ -11,15 +12,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from oncall.audit.service import append_audit_event
-from oncall.auth.dependencies import get_db_session, require_roles
+from oncall.auth.dependencies import CurrentUser, get_db_session, require_roles
 from oncall.graph.contracts import ActionPlanDraft
 from oncall.incidents.state import IncidentStatus, ensure_transition
-from oncall.models import ActionPlan, Approval, Incident
+from oncall.jobs.tasks import resume_incident, start_incident
+from oncall.models import ActionPlan, Approval, Incident, User
 from oncall.policy.engine import evaluate_action_plan
 
 
 router = APIRouter(prefix="/api/v1/incidents", tags=["incidents"])
-ApproverUser = Annotated[object, Depends(require_roles("approver", "admin"))]
+ApproverUser = Annotated[User, Depends(require_roles("approver", "admin"))]
+WorkflowUser = Annotated[User, Depends(require_roles("operator", "approver", "admin"))]
 Session = Annotated[AsyncSession, Depends(get_db_session)]
 
 
@@ -38,14 +41,41 @@ class ApprovalResponse(BaseModel):
     status: str
 
 
-async def _latest_plan(session: AsyncSession, incident_id: UUID) -> ActionPlan | None:
-    result = await session.execute(
+class RetryResponse(BaseModel):
+    incident_id: UUID
+    status: str
+    checkpoint_version: int
+
+
+async def _locked_incident_and_plan(
+    session: AsyncSession, incident_id: UUID
+) -> tuple[Incident, ActionPlan] | None:
+    incident = await session.scalar(
+        select(Incident).where(Incident.id == incident_id).with_for_update()
+    )
+    if incident is None:
+        return None
+    plan = await session.scalar(
         select(ActionPlan)
         .where(ActionPlan.incident_id == incident_id)
         .order_by(ActionPlan.version.desc(), ActionPlan.created_at.desc())
         .limit(1)
+        .with_for_update()
     )
-    return result.scalar_one_or_none()
+    if plan is None:
+        return None
+    return incident, plan
+
+
+def _plan_draft(plan: ActionPlan) -> ActionPlanDraft:
+    return ActionPlanDraft(
+        summary=plan.summary,
+        risk_level=plan.risk_level,
+        prerequisites=plan.prerequisites,
+        rollback=plan.rollback,
+        verification_criteria=plan.verification_criteria,
+        plan_hash=plan.plan_hash,
+    )
 
 
 @router.post("/{incident_id}/approvals", response_model=ApprovalResponse)
@@ -55,25 +85,19 @@ async def approve_incident(
     session: Session,
     current_user: ApproverUser,
 ) -> ApprovalResponse:
-    incident = await session.get(Incident, incident_id)
-    if incident is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="incident not found")
+    """Approve the exact plan hash, commit, then enqueue durable graph resume."""
+
+    locked = await _locked_incident_and_plan(session, incident_id)
+    if locked is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="incident or action plan not found")
+    incident, plan = locked
     if incident.status != IncidentStatus.WAITING_APPROVAL:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="incident is not waiting for approval")
-    plan = await _latest_plan(session, incident_id)
-    if plan is None or plan.plan_hash != payload.action_plan_hash:
+    if plan.plan_hash != payload.action_plan_hash:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="action plan hash changed")
-    decision = evaluate_action_plan(
-        ActionPlanDraft(
-            summary=plan.summary,
-            risk_level=plan.risk_level,
-            prerequisites=plan.prerequisites,
-            rollback=plan.rollback,
-            verification_criteria=plan.verification_criteria,
-            plan_hash=plan.plan_hash,
-        ),
-        incident,
-    )
+    if plan.status != "PENDING_APPROVAL" or not plan.graph_run_id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="action plan is no longer approvable")
+    decision = evaluate_action_plan(_plan_draft(plan), incident)
     if not decision.allowed:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=decision.message)
     approval = Approval(
@@ -84,17 +108,22 @@ async def approve_incident(
         comment=payload.comment,
     )
     plan.status = "APPROVED"
-    incident.status = ensure_transition(incident.status, IncidentStatus.EXECUTING)
     session.add(approval)
     await session.flush()
     await append_audit_event(
         session,
         incident.id,
         "incident.approved",
-        {"action_plan_id": str(plan.id), "action_plan_hash": plan.plan_hash},
+        {
+            "action_plan_id": str(plan.id),
+            "action_plan_hash": plan.plan_hash,
+            "approval_id": str(approval.id),
+        },
         actor=current_user.username,
     )
+    # The durable approval decision is committed before any worker receives it.
     await session.commit()
+    resume_incident.delay(str(incident.id), str(plan.id))
     return ApprovalResponse(
         approval_id=approval.id,
         incident_id=incident.id,
@@ -111,12 +140,18 @@ async def reject_incident(
     session: Session,
     current_user: ApproverUser,
 ) -> ApprovalResponse:
-    incident = await session.get(Incident, incident_id)
-    if incident is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="incident not found")
-    plan = await _latest_plan(session, incident_id)
-    if plan is None or plan.plan_hash != payload.action_plan_hash:
+    """Reject a plan without resuming the graph or calling any write tool."""
+
+    locked = await _locked_incident_and_plan(session, incident_id)
+    if locked is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="incident or action plan not found")
+    incident, plan = locked
+    if incident.status != IncidentStatus.WAITING_APPROVAL:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="incident is not waiting for approval")
+    if plan.plan_hash != payload.action_plan_hash:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="action plan hash changed")
+    if plan.status != "PENDING_APPROVAL":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="action plan is no longer rejectable")
     approval = Approval(
         action_plan_id=plan.id,
         action_plan_hash=plan.plan_hash,
@@ -142,4 +177,40 @@ async def reject_incident(
         action_plan_id=plan.id,
         decision=approval.decision,
         status=incident.status.value,
+    )
+
+
+@router.post("/{incident_id}/retries", response_model=RetryResponse)
+async def retry_investigation(
+    incident_id: UUID,
+    session: Session,
+    current_user: WorkflowUser,
+) -> RetryResponse:
+    """Start a new read-only investigation attempt; it never retries recovery."""
+
+    incident = await session.scalar(
+        select(Incident).where(Incident.id == incident_id).with_for_update()
+    )
+    if incident is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="incident not found")
+    if incident.status != IncidentStatus.NEED_HUMAN:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="only an incident requiring human review can be retried",
+        )
+    incident.status = ensure_transition(incident.status, IncidentStatus.TRIAGING)
+    checkpoint_version = int(datetime.now(timezone.utc).timestamp())
+    await append_audit_event(
+        session,
+        incident.id,
+        "incident.investigation_retried",
+        {"checkpoint_version": checkpoint_version},
+        actor=current_user.username,
+    )
+    await session.commit()
+    start_incident.delay(str(incident.id), checkpoint_version)
+    return RetryResponse(
+        incident_id=incident.id,
+        status=incident.status.value,
+        checkpoint_version=checkpoint_version,
     )
