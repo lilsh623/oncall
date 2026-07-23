@@ -1,0 +1,1 @@
+export function IncidentOverview({ overview }: { overview: Record<string, string | null> }) { return <section><h2>概览</h2><dl className="facts">{Object.entries(overview).map(([key, value]) => <div key={key}><dt>{key}</dt><dd>{value ?? "—"}</dd></div>)}</dl></section>; }

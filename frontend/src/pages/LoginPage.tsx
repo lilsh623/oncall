@@ -1,0 +1,5 @@
+import { FormEvent, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { useAuth } from "../auth/AuthProvider";
+
+export function LoginPage() { const { login } = useAuth(); const navigate = useNavigate(); const location = useLocation(); const [username, setUsername] = useState(""); const [password, setPassword] = useState(""); const [error, setError] = useState(""); const submit = async (event: FormEvent) => { event.preventDefault(); try { await login(username, password); navigate((location.state as { from?: string } | null)?.from ?? "/incidents"); } catch (reason) { setError(reason instanceof Error ? reason.message : "登录失败"); } }; return <main className="login"><form onSubmit={submit}><h1>OnCall 运维控制台</h1><label>用户名<input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" /></label><label>密码<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" /></label>{error && <p className="error">{error}</p>}<button>登录</button></form></main>; }

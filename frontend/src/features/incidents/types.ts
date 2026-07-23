@@ -1,0 +1,3 @@
+export type IncidentListItem = { id: string; title: string; project_id: string; environment: string; service: string; status: string; severity?: string; opened_at: string; updated_at: string };
+export type IncidentDetail = { overview: Record<string, string | null>; alerts: Record<string, unknown>[]; evidence: Record<string, unknown>[]; hypotheses: Record<string, unknown>[]; knowledge_citations: Record<string, unknown>[]; action_plans: Record<string, unknown>[]; approvals: Record<string, unknown>[]; executions: Record<string, unknown>[]; verification: Record<string, unknown>[]; audit_events: AuditEvent[] };
+export type AuditEvent = { id: string; event_type: string; actor: string; created_at: string; payload: Record<string, unknown> };

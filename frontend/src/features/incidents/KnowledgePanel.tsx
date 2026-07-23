@@ -1,0 +1,1 @@
+export function KnowledgePanel({ citations }: { citations: Record<string, unknown>[] }) { return <section><h2>知识与 SOP</h2><ul>{citations.map((item, index) => <li key={`${String(item.document_id)}-${index}`}><strong>{String(item.document_id)}</strong> {String(item.section ?? "")}：{String(item.excerpt ?? "")}</li>)}</ul></section>; }
