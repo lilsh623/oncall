@@ -48,6 +48,10 @@ class MetricName(StrEnum):
 class QueryMetricsRequest(TimeWindowRequest):
     metric: MetricName
     limit: int = Field(default=60, ge=1, le=240)
+    # Optional PromQL rate window. Recovery verification uses a short window so a
+    # just-completed rollback is reflected quickly; the default keeps the longer
+    # window investigation uses for stable trend reading.
+    rate_window_seconds: int | None = Field(default=None, ge=10, le=600)
 
 
 class MetricPoint(StrictModel):

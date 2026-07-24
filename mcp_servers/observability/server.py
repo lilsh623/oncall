@@ -245,12 +245,16 @@ async def query_metrics(request: QueryMetricsRequest) -> MetricsResult:
     """Query one server-defined metric; callers cannot submit PromQL."""
 
     _assert_scope(request)
+    window = f"{request.rate_window_seconds}s" if request.rate_window_seconds else "2m"
     expressions = {
+        # ``or vector(0)`` keeps the numerator at zero once the 5xx series stops
+        # receiving samples after a rollback; otherwise the vanished series reads
+        # as a stale non-zero rate and recovery verification never passes.
         MetricName.HTTP_ERROR_RATE: (
-            'sum(rate(demo_http_requests_total{status=~"5.."}[2m])) '
-            "/ clamp_min(sum(rate(demo_http_requests_total[2m])), 0.000001)"
+            f'(sum(rate(demo_http_requests_total{{status=~"5.."}}[{window}])) or vector(0)) '
+            f"/ clamp_min(sum(rate(demo_http_requests_total[{window}])), 0.000001)"
         ),
-        MetricName.REQUEST_RATE: "sum(rate(demo_http_requests_total[2m]))",
+        MetricName.REQUEST_RATE: f"sum(rate(demo_http_requests_total[{window}]))",
     }
     units = {
         MetricName.HTTP_ERROR_RATE: "ratio",

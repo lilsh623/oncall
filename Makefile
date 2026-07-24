@@ -2,7 +2,7 @@ PYTHON ?= python
 API_HOST ?= 0.0.0.0
 API_PORT ?= 8000
 
-.PHONY: install api worker observability-mcp release-mcp recovery-mcp demo-runtime-init infra-up app-up infra-ps infra-down down demo-healthy demo-fail demo-reset migrate
+.PHONY: install api worker observability-mcp release-mcp recovery-mcp demo-runtime-init infra-up app-up app-host app-host-down infra-ps infra-down down demo-healthy demo-fail demo-reset migrate
 
 install:
 	$(PYTHON) -m pip install -e ".[dev]"
@@ -36,7 +36,25 @@ infra-up: demo-runtime-init
 	$(PYTHON) -m podman_compose up -d postgres redis etcd minio milvus demo-service prometheus alertmanager traffic-generator
 
 app-up: demo-runtime-init migrate
-	$(PYTHON) -m podman_compose up -d api worker observability-mcp release-mcp frontend
+	$(PYTHON) -m podman_compose up -d api frontend
+
+# App-layer processes run on the host (hybrid mode) so the Worker can reach the
+# host Recovery MCP over loopback. A containerized Worker cannot call back into
+# the macOS host through the Podman Machine gateway, and SDD 13.2 forbids
+# mounting the Podman socket into any container.
+HOST_APP_DIR := .runtime/host-app
+
+app-host: demo-runtime-init
+	mkdir -p $(HOST_APP_DIR)
+	$(PYTHON) -m uvicorn mcp_servers.observability.server:app --host 127.0.0.1 --port 18081 > $(HOST_APP_DIR)/observability-mcp.log 2>&1 & echo $$! > $(HOST_APP_DIR)/observability-mcp.pid
+	$(PYTHON) -m uvicorn mcp_servers.release.server:app --host 127.0.0.1 --port 18082 > $(HOST_APP_DIR)/release-mcp.log 2>&1 & echo $$! > $(HOST_APP_DIR)/release-mcp.pid
+	$(PYTHON) -m uvicorn mcp_servers.recovery.server:app --host 127.0.0.1 --port 8080 > $(HOST_APP_DIR)/recovery-mcp.log 2>&1 & echo $$! > $(HOST_APP_DIR)/recovery-mcp.pid
+	$(PYTHON) -m celery -A oncall.jobs.celery_app:celery_app worker --loglevel=INFO > $(HOST_APP_DIR)/worker.log 2>&1 & echo $$! > $(HOST_APP_DIR)/worker.pid
+	@echo "Host app layer started (worker + observability/release/recovery MCP). Logs and PIDs in $(HOST_APP_DIR)."
+
+app-host-down:
+	-@for f in $(HOST_APP_DIR)/*.pid; do [ -f "$$f" ] && kill $$(cat "$$f") 2>/dev/null && rm -f "$$f"; done
+	@echo "Host app layer stopped."
 
 infra-ps:
 	$(PYTHON) -m podman_compose ps

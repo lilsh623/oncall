@@ -73,6 +73,7 @@ async def verify_recovery(
                     "start_time": now - timedelta(minutes=5),
                     "end_time": now,
                     "metric": MetricName.HTTP_ERROR_RATE,
+                    "rate_window_seconds": 30,
                     "limit": 30,
                 },
                 incident_id=str(incident.id),

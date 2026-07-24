@@ -128,6 +128,16 @@ def _guard_decision(
         return baseline
     if decision.next_step == "submit_diagnosis" and (evidence_count == 0 or citation_count == 0):
         return baseline
+    if (
+        decision.next_step in {"call_investigation", "call_knowledge"}
+        and evidence_count > 0
+        and citation_count > 0
+    ):
+        # Read-only evidence and an approved SOP citation are already in hand.
+        # Honor the deterministic baseline (submit_diagnosis) rather than letting
+        # the model spend the remaining rounds re-investigating until the budget
+        # is exhausted and the incident falls to NEED_HUMAN.
+        return baseline
     if decision.next_step == "call_investigation" and rounds >= 4:
         return SupervisorDecision(
             next_step="request_human",

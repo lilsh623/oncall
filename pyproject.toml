@@ -17,6 +17,7 @@ dependencies = [
     "celery[redis]",
     "langgraph",
     "langgraph-checkpoint-postgres",
+    "psycopg[binary]",
     "langchain-openai",
     "pymilvus",
     "mcp",
@@ -27,6 +28,7 @@ dependencies = [
     "prometheus-client",
     "typer",
     "PyYAML",
+    "greenlet",
 ]
 
 [project.optional-dependencies]

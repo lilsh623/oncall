@@ -47,7 +47,10 @@ class Settings(BaseSettings):
     recovery_approval_secret: SecretStr = Field(
         default=SecretStr("demo-only-recovery-approval-secret"), min_length=16
     )
-    recovery_verification_wait_seconds: float = Field(default=15.0, ge=0, le=120)
+    # Recovery verification queries the error rate over a short rate window, so a
+    # brief wait after rollback is enough for that window to clear the pre-rollback
+    # 5xx errors before the health check runs.
+    recovery_verification_wait_seconds: float = Field(default=45.0, ge=0, le=300)
     alertmanager_webhook_secrets: dict[str, SecretStr] = Field(default_factory=dict)
     alert_fingerprint_stable_labels: tuple[str, ...] = ()
 
