@@ -8,7 +8,9 @@ route:
 receivers:
   - name: oncall-api
     webhook_configs:
-      - url: http://host.containers.internal:8000/api/v1/webhooks/alertmanager/demo-shop
+      # API and Alertmanager run on the same private Compose network.  Using the
+      # service name avoids a Podman-Machine-to-macOS host callback.
+      - url: http://api:8000/api/v1/webhooks/alertmanager/demo-shop
         send_resolved: true
         http_config:
           authorization:

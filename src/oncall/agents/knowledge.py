@@ -21,20 +21,19 @@ def run_knowledge_agent(
         citations = search_knowledge(
             KnowledgeQuery(project_id=state.project_id, text=query_text, limit=5)
         )
+        converted = [
+            KnowledgeCitationDraft(
+                document_id=item.document_id,
+                document_version=item.version,
+                section=item.section_path[:512],
+                file_path=item.source_path,
+                excerpt=item.content[:2048],
+                score=item.score,
+            )
+            for item in citations[:5]
+        ]
     except Exception:
-        citations = []
-    converted = [
-        KnowledgeCitationDraft(
-            document_id=item.document_id,
-            document_version=item.document_version,
-            section=item.section,
-            file_path=item.file_path,
-            locator=item.locator,
-            excerpt=item.excerpt,
-            score=item.score,
-        )
-        for item in citations[:5]
-    ]
+        converted = []
     if not converted and allow_offline_fallback:
         converted.append(
             KnowledgeCitationDraft(

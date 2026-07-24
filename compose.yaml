@@ -167,7 +167,7 @@ services:
     build:
       context: .
       dockerfile: containers/api.Containerfile
-    image: localhost/oncall-api:1.0.0
+    image: localhost/oncall-api:1.0.1
     container_name: oncall-api
     env_file: .env
     environment:
@@ -176,6 +176,8 @@ services:
       MILVUS_URI: http://milvus:19530
       OBSERVABILITY_MCP_URL: http://observability-mcp:8081/mcp
       RELEASE_MCP_URL: http://release-mcp:8082/mcp
+      PYTHONPATH: /app/src
+    volumes: ["./src:/app/src:ro"]
     ports: ["127.0.0.1:8000:8000"]
     depends_on:
       postgres: { condition: service_healthy }
@@ -188,7 +190,7 @@ services:
       retries: 10
 
   worker:
-    image: localhost/oncall-api:1.0.0
+    image: localhost/oncall-api:1.0.1
     container_name: oncall-worker
     command: ["python", "-m", "celery", "-A", "oncall.jobs.celery_app:celery_app", "worker", "--loglevel=INFO"]
     env_file: .env
@@ -198,11 +200,13 @@ services:
       MILVUS_URI: http://milvus:19530
       OBSERVABILITY_MCP_URL: http://observability-mcp:8081/mcp
       RELEASE_MCP_URL: http://release-mcp:8082/mcp
+      PYTHONPATH: /app/src
+    volumes: ["./src:/app/src:ro"]
     depends_on:
       api: { condition: service_healthy }
 
   observability-mcp:
-    image: localhost/oncall-api:1.0.0
+    image: localhost/oncall-api:1.0.1
     container_name: oncall-observability-mcp
     command: ["python", "-m", "uvicorn", "mcp_servers.observability.server:app", "--host", "0.0.0.0", "--port", "8081"]
     env_file: .env
@@ -210,7 +214,11 @@ services:
       OBSERVABILITY_PROMETHEUS_URL: http://prometheus:9090
       OBSERVABILITY_ALERTMANAGER_URL: http://alertmanager:9093
       OBSERVABILITY_SERVICE_URL: http://demo-service:8080
-    volumes: ["./.runtime:/app/.runtime:ro"]
+      PYTHONPATH: /app/src
+    volumes:
+      - "./.runtime:/app/.runtime:ro"
+      - "./src:/app/src:ro"
+      - "./mcp_servers:/app/mcp_servers:ro"
     depends_on:
       prometheus: { condition: service_healthy }
       alertmanager: { condition: service_healthy }
@@ -221,11 +229,16 @@ services:
       retries: 10
 
   release-mcp:
-    image: localhost/oncall-api:1.0.0
+    image: localhost/oncall-api:1.0.1
     container_name: oncall-release-mcp
     command: ["python", "-m", "uvicorn", "mcp_servers.release.server:app", "--host", "0.0.0.0", "--port", "8082"]
     env_file: .env
-    volumes: ["./.runtime:/app/.runtime:ro"]
+    environment:
+      PYTHONPATH: /app/src
+    volumes:
+      - "./.runtime:/app/.runtime:ro"
+      - "./src:/app/src:ro"
+      - "./mcp_servers:/app/mcp_servers:ro"
     healthcheck:
       test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8082/health/ready')"]
       interval: 10s

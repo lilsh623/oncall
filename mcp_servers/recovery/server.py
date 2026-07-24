@@ -12,6 +12,7 @@ from uuid import UUID
 
 import uvicorn
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -64,6 +65,10 @@ mcp = FastMCP(
     instructions="Write-capable Recovery MCP. Only fixed rollback_release is exposed.",
     stateless_http=True,
     json_response=True,
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=["127.0.0.1:*", "localhost:*"],
+    ),
 )
 
 
@@ -153,7 +158,7 @@ async def health(_: Request) -> JSONResponse:
 app = mcp.streamable_http_app()
 app.add_middleware(
     BearerAuthMiddleware,
-    expected_token=SERVER_SETTINGS.recovery_mcp_secret.get_secret_value(),
+    secret=SERVER_SETTINGS.recovery_mcp_secret.get_secret_value(),
 )
 
 

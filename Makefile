@@ -48,11 +48,11 @@ down:
 	$(PYTHON) -m podman_compose down
 
 demo-healthy: demo-runtime-init
-	DEMO_VERSION=v1 $(PYTHON) -m podman_compose up -d --build --force-recreate demo-service traffic-generator
+	DEMO_VERSION=v1 $(PYTHON) -m podman_compose up -d --no-deps --build --force-recreate demo-service traffic-generator
 	$(PYTHON) -m oncall.cli demo-release sync --version v1
 
 demo-fail: demo-runtime-init
-	DEMO_VERSION=v2 $(PYTHON) -m podman_compose up -d --build --force-recreate demo-service traffic-generator
+	DEMO_VERSION=v2 $(PYTHON) -m podman_compose up -d --no-deps --build --force-recreate demo-service traffic-generator
 	$(PYTHON) -m oncall.cli demo-release sync --version v2
 
 demo-reset: demo-healthy
