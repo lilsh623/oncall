@@ -94,7 +94,7 @@ class IncidentGraphState(StrictGraphModel):
     execution_result: dict[str, Any] | None = None
     verification_result: dict[str, Any] | None = None
     investigation_rounds: int = Field(default=0, ge=0, le=4)
-    model_call_count: int = Field(default=0, ge=0, le=12)
+    model_call_count: int = Field(default=0, ge=0, le=64)
     no_progress_rounds: int = Field(default=0, ge=0, le=2)
     verification_failures: int = Field(default=0, ge=0, le=1)
     need_human_reason: str | None = None

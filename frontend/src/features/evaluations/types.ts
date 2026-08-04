@@ -1,0 +1,4 @@
+export type EvaluationMetrics = { task_success_rate: number; tool_call_success_rate: number; rag_hit_rate: number; end_to_end_resolution_rate: number; evaluated_cases: number; passed_cases: number; };
+export type EvaluationRun = { id: string; mode: "offline" | "online"; dataset_name: string; dataset_version: string; status: string; case_count: number; passed_count: number; metrics: EvaluationMetrics; started_at: string; completed_at: string | null; error: string | null; created_at: string; };
+export type EvaluationCase = { id: string; case_id: string; category: string; passed: boolean; input: Record<string, unknown>; expected: Record<string, unknown>; actual: Record<string, unknown>; scores: Record<string, unknown>; duration_ms: number; error: string | null; };
+export type EvaluationRunDetail = EvaluationRun & { cases: EvaluationCase[] };

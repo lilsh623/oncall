@@ -8,6 +8,7 @@ from typing import Any
 from oncall.graph.contracts import EvidenceItem, HypothesisDraft, IncidentGraphState
 from oncall.mcp_gateway.client import McpGateway, McpGatewayError
 from oncall.mcp_gateway.schemas import LogLevel, MetricName
+from oncall.skills.selection import select_investigation_skill
 
 
 async def run_investigation_agent(
@@ -18,6 +19,7 @@ async def run_investigation_agent(
     """Collect bounded read-only evidence and propose a hypothesis."""
 
     client = gateway or McpGateway()
+    skill = await select_investigation_skill(state)
     end_time = datetime.now(timezone.utc)
     start_time = end_time - timedelta(minutes=30)
     base = {
@@ -32,7 +34,23 @@ async def run_investigation_agent(
         ("get_service_health", {**base, "start_time": start_time, "end_time": end_time, "limit": 1}),
         ("get_active_alerts", {**base, "start_time": start_time, "end_time": end_time, "limit": 20}),
     ]
+    if skill is not None:
+        allowed = set(skill.allowed_tools)
+        calls = [item for item in calls if item[0] in allowed]
     evidence: list[EvidenceItem] = []
+    if skill is not None:
+        evidence.append(
+            EvidenceItem(
+                source_type="skill",
+                source_ref=f"{skill.name}@{skill.version}",
+                observation="Selected a validated read-only investigation Skill.",
+                payload={
+                    "skill_name": skill.name,
+                    "version": skill.version,
+                    "source_path": skill.source_path,
+                },
+            )
+        )
     for tool_name, arguments in calls:
         try:
             result = await client.call_read_tool(
@@ -73,7 +91,12 @@ async def run_investigation_agent(
         supporting_summary="V1 demo scenario focuses on post-deployment HighErrorRate regressions.",
         next_check="Confirm SOP guidance and rollback target before remediation planning.",
     )
-    return {"evidence": evidence, "hypotheses": [hypothesis], "model_call_count": 0}
+    return {
+        "evidence": evidence,
+        "hypotheses": [hypothesis],
+        "model_call_count": 0,
+        "selected_skill": f"{skill.name}@{skill.version}" if skill is not None else None,
+    }
 
 
 def run_demo_investigation(state: IncidentGraphState) -> dict[str, Any]:
@@ -91,4 +114,9 @@ def run_demo_investigation(state: IncidentGraphState) -> dict[str, Any]:
         supporting_summary="Alert summary and demo release evidence point to v2.",
         next_check="Use SOP to validate rollback criteria.",
     )
-    return {"evidence": [evidence], "hypotheses": [hypothesis], "model_call_count": 0}
+    return {
+        "evidence": [evidence],
+        "hypotheses": [hypothesis],
+        "model_call_count": 0,
+        "selected_skill": None,
+    }

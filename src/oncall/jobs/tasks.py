@@ -15,8 +15,11 @@ from sqlalchemy import select
 from oncall.audit.service import append_audit_event
 from oncall.config import get_settings
 from oncall.database import async_session, get_engine, get_session_factory
-from oncall.execution.service import execute_approved_plan
-from oncall.execution.verification import verify_recovery
+from oncall.evaluation.runner import execute_evaluation_run
+from oncall.experience.service import (
+    ExperienceNotEligible,
+    create_candidate_from_resolved_incident,
+)
 from oncall.graph.contracts import IncidentGraphState
 from oncall.graph.incident import build_incident_graph
 from oncall.incidents.state import IncidentStatus, ensure_transition
@@ -26,13 +29,12 @@ from oncall.models import (
     ActionStep,
     Approval,
     Evidence,
-    Execution,
     Hypothesis,
     Incident,
     KnowledgeCitation,
-    VerificationCheck,
+    EvaluationRun,
 )
-from oncall.metrics import INCIDENT_GRAPH_RUNS, RECOVERY_EXECUTIONS, RECOVERY_VERIFICATION
+from oncall.metrics import INCIDENT_GRAPH_RUNS
 
 
 _worker_loop: asyncio.AbstractEventLoop | None = None
@@ -355,8 +357,37 @@ async def _mark_need_human(incident_id: UUID, *, reason: str, actor: str) -> str
         return incident.status.value
 
 
+async def _extract_resolved_experience(incident_id: UUID) -> None:
+    """Run optional memory extraction after resolution is already durable."""
+
+    async with async_session() as session:
+        try:
+            await create_candidate_from_resolved_incident(session, incident_id)
+            await session.commit()
+            return
+        except ExperienceNotEligible as exc:
+            await session.rollback()
+            reason = str(exc)
+        except Exception:
+            # Memory automation must never roll back or obscure a successful recovery.
+            await session.rollback()
+            reason = "experience extraction failed safely"
+    try:
+        async with async_session() as audit_session:
+            await append_audit_event(
+                audit_session,
+                incident_id,
+                "experience.candidate_skipped",
+                {"reason": reason},
+                actor="system:experience_extractor",
+            )
+            await audit_session.commit()
+    except Exception:
+        return
+
+
 async def _resume_incident(incident_id: UUID, plan_id: UUID) -> dict[str, str]:
-    """Resume a durable approval interrupt, then run and verify one fixed plan."""
+    """Resume the durable graph; graph nodes own execution and verification."""
 
     async with async_session() as session:
         incident = await session.scalar(
@@ -405,91 +436,38 @@ async def _resume_incident(incident_id: UUID, plan_id: UUID) -> dict[str, str]:
             actor="celery:resume_incident",
         )
         return {"incident_id": str(incident_id), "status": status_value}
-    if graph_result.get("status") != IncidentStatus.EXECUTING.value:
+
+    try:
+        graph_status = IncidentStatus(str(graph_result.get("status")))
+    except ValueError:
         status_value = await _mark_need_human(
             incident_id,
-            reason="The resumed graph did not enter the controlled execution state.",
+            reason="The resumed graph returned an invalid terminal state.",
             actor="celery:resume_incident",
         )
         return {"incident_id": str(incident_id), "status": status_value}
 
-    execution = await execute_approved_plan(incident_id, plan_id)
-    RECOVERY_EXECUTIONS.labels(status=execution.status).inc()
-    if execution.status != "SUCCEEDED":
+    if graph_status == IncidentStatus.NEED_HUMAN:
         status_value = await _mark_need_human(
             incident_id,
-            reason=execution.error or f"Recovery execution ended as {execution.status}.",
+            reason=str(
+                graph_result.get("need_human_reason")
+                or "The recovery graph requires human review."
+            ),
             actor="celery:resume_incident",
         )
         return {"incident_id": str(incident_id), "status": status_value}
 
-    async with async_session() as session:
-        incident = await session.scalar(
-            select(Incident).where(Incident.id == incident_id).with_for_update()
-        )
-        plan = await session.get(ActionPlan, plan_id)
-        if incident is None or plan is None:
-            return {"incident_id": str(incident_id), "status": "NOT_FOUND"}
-        if incident.status == IncidentStatus.EXECUTING:
-            incident.status = ensure_transition(incident.status, IncidentStatus.VERIFYING)
-        await append_audit_event(
-            session,
-            incident.id,
-            "incident.recovery_executed",
-            {"execution_id": str(execution.execution_id), "action_plan_id": str(plan.id)},
-            actor="celery:resume_incident",
-        )
-        await session.commit()
+    if graph_status == IncidentStatus.RESOLVED:
+        await _extract_resolved_experience(incident_id)
+        return {"incident_id": str(incident_id), "status": graph_status.value}
 
-    # Verification intentionally happens after the EXECUTING -> VERIFYING commit.
-    verification = await verify_recovery(plan.verification_criteria, incident=incident)
-    RECOVERY_VERIFICATION.labels(passed=str(verification.passed).lower()).inc()
-    async with async_session() as session:
-        incident = await session.scalar(
-            select(Incident).where(Incident.id == incident_id).with_for_update()
-        )
-        persisted_plan = await session.get(ActionPlan, plan_id)
-        execution_record = await session.get(Execution, execution.execution_id)
-        if incident is None or persisted_plan is None:
-            return {"incident_id": str(incident_id), "status": "NOT_FOUND"}
-        for check in verification.checks:
-            session.add(
-                VerificationCheck(
-                    incident_id=incident.id,
-                    execution_id=execution_record.id if execution_record is not None else None,
-                    name=str(check.get("name") or check.get("criterion") or "verification"),
-                    status=str(check.get("status", "unknown")).upper(),
-                    observed_value={key: value for key, value in check.items() if key not in {"name", "status", "criterion"}},
-                    conclusion="PASSED" if verification.passed else "FAILED",
-                    reason=verification.reason,
-                )
-            )
-        previous = incident.status
-        if verification.passed and incident.status == IncidentStatus.VERIFYING:
-            incident.status = ensure_transition(incident.status, IncidentStatus.RESOLVED)
-            incident.resolved_at = datetime.now(UTC)
-            persisted_plan.status = "EXECUTED"
-            event_type = "incident.resolved"
-        elif incident.status == IncidentStatus.VERIFYING:
-            incident.status = ensure_transition(incident.status, IncidentStatus.NEED_HUMAN)
-            event_type = "incident.verification_failed"
-        else:
-            event_type = "incident.verification_recorded"
-        await append_audit_event(
-            session,
-            incident.id,
-            event_type,
-            {
-                "from": previous.value,
-                "to": incident.status.value,
-                "execution_id": str(execution.execution_id),
-                "passed": verification.passed,
-                "reason": verification.reason,
-            },
-            actor="celery:resume_incident",
-        )
-        await session.commit()
-        return {"incident_id": str(incident_id), "status": incident.status.value}
+    status_value = await _mark_need_human(
+        incident_id,
+        reason=f"The recovery graph stopped unexpectedly at {graph_status.value}.",
+        actor="celery:resume_incident",
+    )
+    return {"incident_id": str(incident_id), "status": status_value}
 
 
 @celery_app.task(name="oncall.resume_incident")
@@ -497,6 +475,43 @@ def resume_incident(incident_id: str, plan_id: str) -> dict[str, str]:
     """Idempotently continue only a graph paused at an approved plan boundary."""
 
     return _run_in_worker_loop(_resume_incident(UUID(incident_id), UUID(plan_id)))
+
+
+async def _run_agent_evaluation(run_id: UUID) -> dict[str, str]:
+    async with async_session() as session:
+        run = await session.scalar(
+            select(EvaluationRun).where(EvaluationRun.id == run_id).with_for_update()
+        )
+        if run is None:
+            return {"run_id": str(run_id), "status": "NOT_FOUND"}
+        if run.status != "PENDING":
+            return {"run_id": str(run_id), "status": run.status}
+        run.status = "RUNNING"
+        await session.commit()
+    try:
+        async with async_session() as session:
+            run = await session.get(EvaluationRun, run_id)
+            if run is None:
+                return {"run_id": str(run_id), "status": "NOT_FOUND"}
+            await execute_evaluation_run(session, run)
+            await session.commit()
+            return {"run_id": str(run_id), "status": run.status}
+    except Exception as exc:
+        async with async_session() as session:
+            run = await session.get(EvaluationRun, run_id, with_for_update=True)
+            if run is not None:
+                run.status = "FAILED"
+                run.error = type(exc).__name__
+                run.completed_at = datetime.now(UTC)
+                await session.commit()
+        return {"run_id": str(run_id), "status": "FAILED"}
+
+
+@celery_app.task(name="oncall.run_agent_evaluation")
+def run_agent_evaluation(run_id: str) -> dict[str, str]:
+    """Execute a potentially slow online evaluation outside the API request."""
+
+    return _run_in_worker_loop(_run_agent_evaluation(UUID(run_id)))
 
 
 @worker_process_shutdown.connect

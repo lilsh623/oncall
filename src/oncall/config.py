@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     bailian_api_key: SecretStr
     bailian_base_url: str
     bailian_chat_model: str
+    agent_loop_max_turns: int = Field(default=8, ge=2, le=20)
+    agent_specialist_max_turns: int = Field(default=4, ge=2, le=10)
+    agent_max_tool_calls: int = Field(default=16, ge=4, le=64)
+    openai_agents_tracing_enabled: bool = False
     bailian_embedding_model: str = Field(min_length=1, max_length=256)
     bailian_embedding_dimension: int = Field(default=1024, gt=0, le=32768)
     milvus_uri: str
@@ -41,6 +45,13 @@ class Settings(BaseSettings):
         default="oncall_operational_knowledge",
         # Reserve ten characters for the companion ``__manifest`` collection.
         pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,244}$",
+    )
+    conversation_router_live: bool = True
+    mem0_enabled: bool = True
+    mem0_telemetry: bool = False
+    mem0_collection: str = Field(
+        default="oncall_conversation_memory",
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,254}$",
     )
     recovery_mcp_url: str
     recovery_mcp_secret: SecretStr

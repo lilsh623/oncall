@@ -1,4 +1,4 @@
-PYTHON ?= python
+PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
 API_HOST ?= 0.0.0.0
 API_PORT ?= 8000
 

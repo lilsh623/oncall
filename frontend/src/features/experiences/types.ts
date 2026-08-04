@@ -1,0 +1,80 @@
+export type ExperienceCandidate = {
+  id: string;
+  incident_id: string;
+  project_id: string;
+  environment: string;
+  service: string;
+  pattern_fingerprint: string;
+  content_hash: string;
+  title: string;
+  summary: string;
+  symptoms: unknown[];
+  root_cause: string;
+  action: Record<string, unknown>;
+  verification: unknown[];
+  warnings: unknown[];
+  source_refs: Record<string, unknown>;
+  confidence: number;
+  redaction_version: string;
+  status: "PENDING_REVIEW" | "PUBLISHED" | "REJECTED";
+  duplicate_of_id: string | null;
+  reviewed_by: string | null;
+  review_comment: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PublishedExperience = {
+  id: string;
+  candidate_id: string;
+  project_id: string;
+  environment: string;
+  service: string;
+  pattern_fingerprint: string;
+  content_hash: string;
+  version: number;
+  title: string;
+  content: Record<string, unknown>;
+  source_incident_ids: unknown[];
+  published_by: string | null;
+  published_at: string;
+  status: string;
+};
+
+export type SkillCandidate = {
+  id: string;
+  experience_id: string;
+  project_id: string;
+  environment: string;
+  service: string;
+  skill_name: string;
+  proposed_version: string;
+  manifest: Record<string, unknown>;
+  instructions: string;
+  content_hash: string;
+  source_experience_ids: unknown[];
+  status: string;
+  reviewed_by: string | null;
+  review_comment: string | null;
+  reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type SkillVersion = {
+  id: string;
+  candidate_id: string;
+  project_id: string;
+  environment: string;
+  service: string;
+  skill_name: string;
+  version: string;
+  manifest: Record<string, unknown>;
+  instructions: string;
+  content_hash: string;
+  source_experience_ids: unknown[];
+  status: string;
+  published_by: string | null;
+  published_at: string;
+};

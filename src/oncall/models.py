@@ -1,7 +1,4 @@
-"""SQLAlchemy models for OnCall runtime facts and audit history.
-
-These tables are operational state, not a cross-Incident memory system.
-"""
+"""SQLAlchemy models for OnCall runtime facts, audit history, and reviewed experience."""
 
 from datetime import UTC, datetime
 from typing import Any
@@ -301,6 +298,204 @@ class VerificationCheck(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
     conclusion: Mapped[str | None] = mapped_column(String(64))
     reason: Mapped[str | None] = mapped_column(Text)
     checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ExperienceCandidate(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
+    """A grounded, redacted experience proposal extracted from one resolved Incident."""
+
+    __tablename__ = "experience_candidates"
+    __table_args__ = (
+        UniqueConstraint("incident_id", name="uq_experience_candidates_incident"),
+    )
+
+    incident_id: Mapped[UUID] = mapped_column(
+        ForeignKey("incidents.id", ondelete="CASCADE"), index=True
+    )
+    project_id: Mapped[str] = mapped_column(String(128), index=True)
+    environment: Mapped[str] = mapped_column(String(64), index=True)
+    service: Mapped[str] = mapped_column(String(128), index=True)
+    pattern_fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(String(512))
+    summary: Mapped[str] = mapped_column(Text)
+    symptoms: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    root_cause: Mapped[str] = mapped_column(Text)
+    action: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    verification: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    warnings: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    source_refs: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    redaction_version: Mapped[str] = mapped_column(String(32), default="1.0")
+    status: Mapped[str] = mapped_column(String(32), default="PENDING_REVIEW", index=True)
+    duplicate_of_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("experience_candidates.id", ondelete="SET NULL"), index=True
+    )
+    reviewed_by: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    review_comment: Mapped[str | None] = mapped_column(Text)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Experience(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
+    """An immutable-in-spirit reviewed experience available to future retrieval."""
+
+    __tablename__ = "experiences"
+    __table_args__ = (
+        UniqueConstraint("candidate_id", name="uq_experiences_candidate"),
+        UniqueConstraint("content_hash", name="uq_experiences_content_hash"),
+    )
+
+    candidate_id: Mapped[UUID] = mapped_column(
+        ForeignKey("experience_candidates.id", ondelete="RESTRICT"), index=True
+    )
+    project_id: Mapped[str] = mapped_column(String(128), index=True)
+    environment: Mapped[str] = mapped_column(String(64), index=True)
+    service: Mapped[str] = mapped_column(String(128), index=True)
+    pattern_fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    title: Mapped[str] = mapped_column(String(512))
+    content: Mapped[dict[str, Any]] = mapped_column(JSON)
+    source_incident_ids: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    published_by: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    status: Mapped[str] = mapped_column(String(32), default="PUBLISHED", index=True)
+
+
+class SkillCandidate(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
+    """A reviewed-experience-derived Skill proposal that has no runtime authority."""
+
+    __tablename__ = "skill_candidates"
+    __table_args__ = (
+        UniqueConstraint("experience_id", name="uq_skill_candidates_experience"),
+    )
+
+    experience_id: Mapped[UUID] = mapped_column(
+        ForeignKey("experiences.id", ondelete="RESTRICT"), index=True
+    )
+    project_id: Mapped[str] = mapped_column(String(128), index=True)
+    environment: Mapped[str] = mapped_column(String(64), index=True)
+    service: Mapped[str] = mapped_column(String(128), index=True)
+    skill_name: Mapped[str] = mapped_column(String(64), index=True)
+    proposed_version: Mapped[str] = mapped_column(String(32))
+    manifest: Mapped[dict[str, Any]] = mapped_column(JSON)
+    instructions: Mapped[str] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    source_experience_ids: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(32), default="PENDING_REVIEW", index=True)
+    reviewed_by: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    review_comment: Mapped[str | None] = mapped_column(Text)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SkillVersion(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
+    """A versioned, active-or-retired learned investigation Skill."""
+
+    __tablename__ = "skill_versions"
+    __table_args__ = (
+        UniqueConstraint("candidate_id", name="uq_skill_versions_candidate"),
+        UniqueConstraint(
+            "project_id", "skill_name", "version", name="uq_skill_versions_identity"
+        ),
+    )
+
+    candidate_id: Mapped[UUID] = mapped_column(
+        ForeignKey("skill_candidates.id", ondelete="RESTRICT"), index=True
+    )
+    project_id: Mapped[str] = mapped_column(String(128), index=True)
+    environment: Mapped[str] = mapped_column(String(64), index=True)
+    service: Mapped[str] = mapped_column(String(128), index=True)
+    skill_name: Mapped[str] = mapped_column(String(64), index=True)
+    version: Mapped[str] = mapped_column(String(32))
+    manifest: Mapped[dict[str, Any]] = mapped_column(JSON)
+    instructions: Mapped[str] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    source_experience_ids: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(32), default="ACTIVE", index=True)
+    published_by: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class Conversation(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
+    """A user-owned, durable natural-language entry point into OnCall."""
+
+    __tablename__ = "conversations"
+
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(256), default="新对话")
+    status: Mapped[str] = mapped_column(String(32), default="ACTIVE", index=True)
+    last_intent: Mapped[str | None] = mapped_column(String(32))
+    linked_incident_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("incidents.id", ondelete="SET NULL"), index=True
+    )
+
+
+class ConversationMessage(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+    """One bounded conversation turn with the router decision preserved."""
+
+    __tablename__ = "conversation_messages"
+
+    conversation_id: Mapped[UUID] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[str] = mapped_column(String(16))
+    content: Mapped[str] = mapped_column(Text)
+    intent: Mapped[str | None] = mapped_column(String(32), index=True)
+    action: Mapped[str | None] = mapped_column(String(32))
+    entities: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    citations: Mapped[list[Any]] = mapped_column(JSON, default=list)
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
+
+
+class EvaluationRun(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+    """One reproducible offline or online Agent evaluation run."""
+
+    __tablename__ = "evaluation_runs"
+
+    mode: Mapped[str] = mapped_column(String(16), index=True)
+    dataset_name: Mapped[str] = mapped_column(String(128))
+    dataset_version: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    created_by: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    case_count: Mapped[int] = mapped_column(Integer, default=0)
+    passed_count: Mapped[int] = mapped_column(Integer, default=0)
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error: Mapped[str | None] = mapped_column(Text)
+
+
+class EvaluationCaseResult(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+    """Explainable result for a single evaluation case."""
+
+    __tablename__ = "evaluation_case_results"
+    __table_args__ = (
+        UniqueConstraint("run_id", "case_id", name="uq_evaluation_result_run_case"),
+    )
+
+    run_id: Mapped[UUID] = mapped_column(
+        ForeignKey("evaluation_runs.id", ondelete="CASCADE"), index=True
+    )
+    case_id: Mapped[str] = mapped_column(String(128), index=True)
+    category: Mapped[str] = mapped_column(String(32), index=True)
+    passed: Mapped[bool] = mapped_column(Boolean)
+    input: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    expected: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    actual: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    scores: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text)
 
 
 class AuditEvent(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):

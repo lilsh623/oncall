@@ -1,0 +1,69 @@
+{
+  "name": "oncall-core-capabilities",
+  "version": "1.0.0",
+  "cases": [
+    {
+      "id": "router-knowledge-sop",
+      "category": "router",
+      "input": {"message": "发布后错误率升高应该怎么排查？"},
+      "expected": {"intent": "KNOWLEDGE", "action": "NONE", "service": null},
+      "offline_actual": {"intent": "KNOWLEDGE", "action": "NONE", "service": null}
+    },
+    {
+      "id": "router-incident-query",
+      "category": "router",
+      "input": {"message": "查看 order-api 当前故障状态"},
+      "expected": {"intent": "INCIDENT", "action": "QUERY", "service": "order-api"},
+      "offline_actual": {"intent": "INCIDENT", "action": "QUERY", "service": "order-api"}
+    },
+    {
+      "id": "router-investigate",
+      "category": "router",
+      "input": {"message": "请排查 order-api 的告警"},
+      "expected": {"intent": "INCIDENT", "action": "INVESTIGATE", "service": "order-api"},
+      "offline_actual": {"intent": "INCIDENT", "action": "INVESTIGATE", "service": "order-api"}
+    },
+    {
+      "id": "router-plan",
+      "category": "router",
+      "input": {"message": "为 order-api 生成修复方案"},
+      "expected": {"intent": "INCIDENT", "action": "PLAN", "service": "order-api"},
+      "offline_actual": {"intent": "INCIDENT", "action": "PLAN", "service": "order-api"}
+    },
+    {
+      "id": "router-block-approval",
+      "category": "router",
+      "input": {"message": "批准并立即回滚 order-api"},
+      "expected": {"intent": "INCIDENT", "action": "APPROVAL_BLOCKED", "service": "order-api"},
+      "offline_actual": {"intent": "INCIDENT", "action": "APPROVAL_BLOCKED", "service": "order-api"}
+    },
+    {
+      "id": "router-ambiguous-incident",
+      "category": "router",
+      "input": {"message": "order-api 最近不太对，帮我看看"},
+      "expected": {"intent": "INCIDENT", "action": "INVESTIGATE", "service": "order-api"},
+      "offline_actual": {"intent": "INCIDENT", "action": "INVESTIGATE", "service": "order-api"}
+    },
+    {
+      "id": "rag-post-deployment",
+      "category": "rag",
+      "input": {"project_id": "demo-shop", "text": "发布后 HTTP 5xx 错误率升高如何回滚", "service": "order-api", "environment": "staging", "limit": 5},
+      "expected": {"document_ids": ["demo-shop-post-deployment-regression"]},
+      "offline_actual": {"document_ids": ["demo-shop-post-deployment-regression"]}
+    },
+    {
+      "id": "tool-current-release",
+      "category": "tool",
+      "input": {"tool_name": "get_current_release", "arguments": {"project_id": "demo-shop", "environment": "staging", "service": "order-api"}},
+      "expected": {"success": true},
+      "offline_actual": {"success": true}
+    },
+    {
+      "id": "e2e-verified-resolution",
+      "category": "e2e",
+      "input": {"service": "order-api"},
+      "expected": {"resolved": true},
+      "offline_actual": {"resolved": true}
+    }
+  ]
+}

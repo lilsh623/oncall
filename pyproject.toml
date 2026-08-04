@@ -19,6 +19,7 @@ dependencies = [
     "langgraph-checkpoint-postgres",
     "psycopg[binary]",
     "langchain-openai",
+    "openai-agents>=0.18.3,<0.19",
     "pymilvus",
     "mcp",
     "argon2-cffi",
@@ -28,6 +29,7 @@ dependencies = [
     "prometheus-client",
     "typer",
     "PyYAML",
+    "mem0ai",
     "greenlet",
 ]
 
@@ -44,3 +46,6 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"oncall.evaluation" = ["datasets/*.json"]
