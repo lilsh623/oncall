@@ -94,15 +94,7 @@ def build_skill_material(
             "service_types": ["http-api"],
             "labels": {},
         },
-        "allowed_tools": [
-            "query_metrics",
-            "query_service_logs",
-            "get_service_health",
-            "get_active_alerts",
-            "get_current_release",
-            "get_recent_releases",
-            "get_release_diff",
-        ],
+        "allowed_tools": ["query_service_logs"],
         "forbidden_actions": ["rollback", "restart", "scale", "arbitrary_write"],
         "output_schema": _output_schema(),
     }
@@ -115,10 +107,10 @@ def build_skill_material(
         "root cause applies now.\n\n"
         f"## Reviewed pattern\n\nRoot cause: {root_cause}\n\nSymptoms:\n{symptom_lines}\n\n"
         "## Investigation procedure\n\n"
-        "1. Query the current release and recent releases; compare their timestamps with the alert.\n"
-        "2. Query bounded error-rate metrics, service health, active alerts, and error logs.\n"
+        "1. Query bounded Tencent CLS error and warning logs around the alert window.\n"
+        "2. Extract only release/version facts that are explicitly present in indexed log fields.\n"
         "3. Compare current observations with the reviewed pattern and list opposing evidence.\n"
-        "4. If evidence is missing or conflicts, lower confidence and request human review.\n"
+        "4. If version or recovery-target evidence is missing, request human review.\n"
         "5. Return only structured observations; never execute or authorize remediation.\n\n"
         "## Historical action context\n\n"
         f"The source Incident used this verified action as context: {action}. "

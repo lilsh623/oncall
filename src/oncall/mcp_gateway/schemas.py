@@ -1,4 +1,4 @@
-"""Fixed input and output contracts shared by read-only MCP servers and Gateway."""
+"""Strict contracts for the Tencent CLS read-only MCP gateway."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ class ScopedRequest(StrictModel):
 class TimeWindowRequest(ScopedRequest):
     start_time: datetime
     end_time: datetime
-    limit: int = Field(default=60, ge=1, le=500)
+    limit: int = Field(default=60, ge=1, le=100)
 
     @field_validator("start_time", "end_time")
     @classmethod
@@ -38,35 +38,6 @@ class TimeWindowRequest(ScopedRequest):
         if (self.end_time - self.start_time).total_seconds() > 86_400:
             raise ValueError("time window cannot exceed 24 hours")
         return self
-
-
-class MetricName(StrEnum):
-    HTTP_ERROR_RATE = "http_error_rate"
-    REQUEST_RATE = "request_rate"
-
-
-class QueryMetricsRequest(TimeWindowRequest):
-    metric: MetricName
-    limit: int = Field(default=60, ge=1, le=240)
-    # Optional PromQL rate window. Recovery verification uses a short window so a
-    # just-completed rollback is reflected quickly; the default keeps the longer
-    # window investigation uses for stable trend reading.
-    rate_window_seconds: int | None = Field(default=None, ge=10, le=600)
-
-
-class MetricPoint(StrictModel):
-    timestamp: datetime
-    value: float | None
-
-
-class MetricsResult(StrictModel):
-    project_id: str
-    environment: str
-    service: str
-    metric: MetricName
-    unit: Literal["ratio", "requests_per_second"]
-    points: list[MetricPoint]
-    query_summary: str
 
 
 class LogLevel(StrEnum):
@@ -106,83 +77,7 @@ class LogsResult(StrictModel):
     entries: list[LogEntry] = Field(max_length=100)
     returned_bytes: int = Field(ge=0, le=20_480)
     truncated: bool
-    source_status: Literal["available", "not_configured"]
-
-
-class ServiceHealthRequest(TimeWindowRequest):
-    limit: int = Field(default=1, ge=1, le=1)
-
-
-class ServiceHealthResult(StrictModel):
-    project_id: str
-    environment: str
-    service: str
-    status: Literal["healthy", "unhealthy", "unknown"]
-    checked_at: datetime
-    detail: str = Field(max_length=1024)
-
-
-class ActiveAlertsRequest(TimeWindowRequest):
-    limit: int = Field(default=20, ge=1, le=100)
-
-
-class ActiveAlert(StrictModel):
-    name: str
-    severity: str
-    status: str
-    starts_at: datetime | None = None
-    summary: str = Field(default="", max_length=2048)
-
-
-class ActiveAlertsResult(StrictModel):
-    project_id: str
-    environment: str
-    service: str
-    alerts: list[ActiveAlert] = Field(max_length=100)
-    observed_at: datetime
-
-
-class CurrentReleaseRequest(ScopedRequest):
-    pass
-
-
-class RecentReleasesRequest(TimeWindowRequest):
-    limit: int = Field(default=10, ge=1, le=50)
-
-
-class ReleaseRecord(StrictModel):
-    version: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-    released_at: datetime
-    released_by: str = Field(max_length=128)
-    change_summary: str = Field(max_length=4096)
-
-
-class CurrentReleaseResult(StrictModel):
-    project_id: str
-    environment: str
-    service: str
-    release: ReleaseRecord
-
-
-class RecentReleasesResult(StrictModel):
-    project_id: str
-    environment: str
-    service: str
-    releases: list[ReleaseRecord] = Field(max_length=50)
-
-
-class ReleaseDiffRequest(ScopedRequest):
-    from_version: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-    to_version: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-
-
-class ReleaseDiffResult(StrictModel):
-    project_id: str
-    environment: str
-    service: str
-    from_version: str
-    to_version: str
-    summary: str = Field(max_length=8192)
+    source_status: Literal["available"] = "available"
 
 
 class FailureCategory(StrEnum):
@@ -199,8 +94,8 @@ class ToolAuditContext(StrictModel):
 
 class ToolResult(StrictModel):
     tool_call_id: str
-    server: Literal["observability", "release"]
-    tool_name: str
+    server: Literal["cls"]
+    tool_name: Literal["query_service_logs"]
     started_at: datetime
     completed_at: datetime
     duration_ms: int = Field(ge=0)

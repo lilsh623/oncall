@@ -15,7 +15,7 @@ class GraphContractsTest(unittest.TestCase):
         from oncall.graph.contracts import ActionPlanDraft, RollbackReleaseAction
 
         action = RollbackReleaseAction(
-            project_id="demo-shop",
+            project_id="payments",
             environment="staging",
             service="order-api",
             current_version="v2",
@@ -47,7 +47,7 @@ class GraphContractsTest(unittest.TestCase):
         state = IncidentGraphState(
             incident_id=str(uuid4()),
             status="TRIAGING",
-            project_id="demo-shop",
+            project_id="payments",
             environment="staging",
             service="order-api",
             alert_summary="HighErrorRate after release v2",
@@ -111,7 +111,7 @@ class GraphContractsTest(unittest.TestCase):
                 incident_id=str(incident_id),
                 graph_run_id=f"incident:{incident_id}:attempt:1",
                 status="TRIAGING",
-                project_id="demo-shop",
+                project_id="payments",
                 environment="staging",
                 service="order-api",
                 alert_summary="HighErrorRate after release v2",
@@ -170,7 +170,7 @@ class GraphContractsTest(unittest.TestCase):
                 incident_id=str(incident_id),
                 graph_run_id=f"incident:{incident_id}:attempt:1",
                 status="TRIAGING",
-                project_id="demo-shop",
+                project_id="payments",
                 environment="staging",
                 service="order-api",
                 alert_summary="HighErrorRate after release v2",

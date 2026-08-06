@@ -8,7 +8,7 @@ class SkillEvolutionTest(unittest.TestCase):
         from oncall.skills.schemas import SkillManifest
 
         experience = Experience(
-            project_id="demo-shop",
+            project_id="payments",
             environment="staging",
             service="order-api",
             candidate_id="00000000-0000-0000-0000-000000000001",
@@ -30,7 +30,7 @@ class SkillEvolutionTest(unittest.TestCase):
             version="1.0.0",
         )
         validated = SkillManifest.model_validate(manifest)
-        self.assertIn("query_metrics", validated.allowed_tools)
+        self.assertEqual(validated.allowed_tools, ("query_service_logs",))
         self.assertNotIn("rollback_release", validated.allowed_tools)
         self.assertEqual(
             {"rollback", "restart", "scale", "arbitrary_write"},

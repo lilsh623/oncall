@@ -34,16 +34,4 @@ def run_knowledge_agent(
         ]
     except Exception:
         converted = []
-    if not converted and allow_offline_fallback:
-        converted.append(
-            KnowledgeCitationDraft(
-                document_id="demo-shop-post-deployment-regression-sop",
-                document_version="offline-fallback",
-                section="Rollback criteria",
-                file_path="project-packs/demo-shop/knowledge/post-deployment-regression.md",
-                locator="offline-demo",
-                excerpt="When HighErrorRate follows a release and health checks fail, prepare a rollback_release plan after human approval.",
-                score=0.0,
-            )
-        )
     return {"knowledge_citations": converted, "model_call_count": 0}

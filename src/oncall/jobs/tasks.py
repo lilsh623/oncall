@@ -190,7 +190,7 @@ async def _persist_graph_findings(
             tool_name="rollback_release",
             tool_arguments=plan.rollback,
             risk_level=plan.risk_level,
-            expected_result="order-api runs the approved target version",
+            expected_result="腾讯云服务运行已批准的目标版本",
         )
     )
     return plan

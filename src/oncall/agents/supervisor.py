@@ -54,7 +54,7 @@ def _deterministic_decision(
     if evidence_count == 0:
         return SupervisorDecision(
             next_step="call_investigation",
-            rationale="Collect read-only metrics, logs, health, alerts, and release evidence.",
+            rationale="Collect scoped read-only evidence from Tencent CLS logs.",
         )
     if citation_count == 0:
         return SupervisorDecision(
@@ -214,7 +214,7 @@ async def draft_diagnosis(
     if not live_mode:
         return (
             DiagnosisDraft(
-                root_cause="The latest order-api release likely caused a post-deployment HTTP error regression.",
+                root_cause="The latest Tencent Cloud service release likely caused a post-deployment error regression.",
                 confidence=max((item.confidence for item in state.hypotheses), default=0.7),
                 summary="Read-only investigation and SOP retrieval support preparing a rollback plan.",
             ),

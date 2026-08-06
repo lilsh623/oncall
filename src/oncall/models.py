@@ -70,6 +70,70 @@ class RefreshToken(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class CloudProject(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
+    """A tenant project whose services are managed by the operations agent."""
+
+    __tablename__ = "cloud_projects"
+    __table_args__ = (UniqueConstraint("project_id", name="uq_cloud_projects_project_id"),)
+
+    project_id: Mapped[str] = mapped_column(String(64), index=True)
+    name: Mapped[str] = mapped_column(String(256))
+    provider: Mapped[str] = mapped_column(String(32), default="tencent")
+    region: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), default="active")
+    created_by: Mapped[UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+
+
+class CloudService(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
+    """A deployable service plus its observability and recovery bindings."""
+
+    __tablename__ = "cloud_services"
+    __table_args__ = (
+        UniqueConstraint(
+            "cloud_project_id",
+            "environment",
+            "service",
+            name="uq_cloud_services_scope",
+        ),
+    )
+
+    cloud_project_id: Mapped[UUID] = mapped_column(
+        ForeignKey("cloud_projects.id", ondelete="CASCADE"), index=True
+    )
+    environment: Mapped[str] = mapped_column(String(64), index=True)
+    service: Mapped[str] = mapped_column(String(128), index=True)
+    runtime_type: Mapped[str] = mapped_column(String(32))
+    resource_config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    observability_config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    recovery_config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    health_config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(32), default="active")
+
+
+class AlertIntegration(UUIDPrimaryKeyMixin, UpdatedAtMixin, Base):
+    """A revocable, authenticated public alert entry point for one project."""
+
+    __tablename__ = "alert_integrations"
+    __table_args__ = (
+        UniqueConstraint("integration_key", name="uq_alert_integrations_key"),
+    )
+
+    cloud_project_id: Mapped[UUID] = mapped_column(
+        ForeignKey("cloud_projects.id", ondelete="CASCADE"), index=True
+    )
+    integration_key: Mapped[str] = mapped_column(String(96), index=True)
+    name: Mapped[str] = mapped_column(String(256))
+    source: Mapped[str] = mapped_column(String(64), index=True)
+    environment: Mapped[str] = mapped_column(String(64))
+    service: Mapped[str] = mapped_column(String(128))
+    secret_hash: Mapped[str] = mapped_column(String(64))
+    mapping_config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(32), default="active")
+    last_received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class RawAlertEvent(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     __tablename__ = "raw_alert_events"
 

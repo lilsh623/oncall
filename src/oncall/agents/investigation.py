@@ -7,7 +7,7 @@ from typing import Any
 
 from oncall.graph.contracts import EvidenceItem, HypothesisDraft, IncidentGraphState
 from oncall.mcp_gateway.client import McpGateway, McpGatewayError
-from oncall.mcp_gateway.schemas import LogLevel, MetricName
+from oncall.mcp_gateway.schemas import LogLevel
 from oncall.skills.selection import select_investigation_skill
 
 
@@ -28,11 +28,7 @@ async def run_investigation_agent(
         "service": state.service,
     }
     calls = [
-        ("get_current_release", base),
-        ("query_metrics", {**base, "start_time": start_time, "end_time": end_time, "metric": MetricName.HTTP_ERROR_RATE, "limit": 30}),
-        ("query_service_logs", {**base, "start_time": start_time, "end_time": end_time, "levels": (LogLevel.ERROR, LogLevel.WARNING), "limit": 20}),
-        ("get_service_health", {**base, "start_time": start_time, "end_time": end_time, "limit": 1}),
-        ("get_active_alerts", {**base, "start_time": start_time, "end_time": end_time, "limit": 20}),
+        ("query_service_logs", {**base, "start_time": start_time, "end_time": end_time, "levels": (LogLevel.ERROR, LogLevel.WARNING), "limit": 50}),
     ]
     if skill is not None:
         allowed = set(skill.allowed_tools)
@@ -86,37 +82,14 @@ async def run_investigation_agent(
             )
         )
     hypothesis = HypothesisDraft(
-        description="HTTP errors likely correlate with the latest order-api release.",
+        description="CLS error logs indicate a service regression requiring operator diagnosis.",
         confidence=0.7,
-        supporting_summary="V1 demo scenario focuses on post-deployment HighErrorRate regressions.",
-        next_check="Confirm SOP guidance and rollback target before remediation planning.",
+        supporting_summary="The hypothesis is based only on Tencent Cloud CLS evidence.",
+        next_check="Confirm the registered Tencent Cloud rollback target before remediation planning.",
     )
     return {
         "evidence": evidence,
         "hypotheses": [hypothesis],
         "model_call_count": 0,
         "selected_skill": f"{skill.name}@{skill.version}" if skill is not None else None,
-    }
-
-
-def run_demo_investigation(state: IncidentGraphState) -> dict[str, Any]:
-    """Explicit offline fixture used only by deterministic contract tests."""
-
-    evidence = EvidenceItem(
-        source_type="mcp",
-        source_ref="offline_demo_observability",
-        observation="HighErrorRate appeared after the latest v2 release of order-api.",
-        payload={"current_version": "v2", "previous_healthy_version": "v1"},
-    )
-    hypothesis = HypothesisDraft(
-        description="Latest release v2 introduced an order-api regression.",
-        confidence=0.86,
-        supporting_summary="Alert summary and demo release evidence point to v2.",
-        next_check="Use SOP to validate rollback criteria.",
-    )
-    return {
-        "evidence": [evidence],
-        "hypotheses": [hypothesis],
-        "model_call_count": 0,
-        "selected_skill": None,
     }

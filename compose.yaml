@@ -1,270 +1,73 @@
 services:
   postgres:
-    image: postgres:16.8-alpine
-    container_name: oncall-postgres
+    image: postgres:16-alpine
     environment:
       POSTGRES_DB: oncall
       POSTGRES_USER: oncall
       POSTGRES_PASSWORD: oncall
-    ports:
-      - "127.0.0.1:15432:5432"
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U oncall -d oncall"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
+    ports: ["127.0.0.1:15432:5432"]
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
 
   redis:
-    image: redis:7.4.2-alpine
-    container_name: oncall-redis
-    ports:
-      - "127.0.0.1:16379:6379"
-    volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-  etcd:
-    image: quay.io/coreos/etcd:v3.5.18
-    container_name: oncall-etcd
-    command:
-      - etcd
-      - --advertise-client-urls=http://0.0.0.0:2379
-      - --listen-client-urls=http://0.0.0.0:2379
-      - --data-dir=/etcd
-    ports:
-      - "127.0.0.1:12379:2379"
-    volumes:
-      - etcd-data:/etcd
-    healthcheck:
-      test: ["CMD", "etcdctl", "endpoint", "health"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
-  minio:
-    image: minio/minio:RELEASE.2025-02-18T16-25-55Z
-    container_name: oncall-minio
-    command: server /data --console-address :9001
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    ports:
-      - "127.0.0.1:19000:9000"
-      - "127.0.0.1:19001:9001"
-    volumes:
-      - minio-data:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:9000/minio/health/live"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
+    image: redis:7-alpine
+    ports: ["127.0.0.1:16379:6379"]
+    volumes: ["redis-data:/data"]
 
   milvus:
-    image: milvusdb/milvus:v2.5.27
-    container_name: oncall-milvus
+    image: milvusdb/milvus:v2.5.4
     command: ["milvus", "run", "standalone"]
-    security_opt:
-      - seccomp:unconfined
     environment:
-      ETCD_ENDPOINTS: etcd:2379
-      MINIO_ADDRESS: minio:9000
-    depends_on:
-      etcd:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-    ports:
-      - "127.0.0.1:19530:19530"
-      - "127.0.0.1:19091:9091"
-    volumes:
-      - milvus-data:/var/lib/milvus
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:9091/healthz"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-
-  demo-service:
-    build:
-      context: .
-      dockerfile: containers/demo.Containerfile
-    image: localhost/oncall-demo:1.0.0
-    container_name: oncall-demo-service
-    environment:
-      DEMO_VERSION: ${DEMO_VERSION:-v1}
-      DEMO_FAILURE_RATE: "1.0"
-      DEMO_LOG_PATH: /runtime/demo-service.log
-    ports:
-      - "127.0.0.1:18080:8080"
-    volumes:
-      - ./.runtime/demo-logs:/runtime
-    healthcheck:
-      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8080/health')"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-  prometheus:
-    image: prom/prometheus:v3.2.1
-    container_name: oncall-prometheus
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      - --web.enable-lifecycle
-    ports:
-      - "127.0.0.1:19090:9090"
-    volumes:
-      - ./demo/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./demo/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
-      - prometheus-data:/prometheus
-    depends_on:
-      demo-service:
-        condition: service_healthy
-      alertmanager:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9090/-/healthy"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  alertmanager:
-    image: prom/alertmanager:v0.28.0
-    container_name: oncall-alertmanager
-    command:
-      - --config.file=/etc/alertmanager/alertmanager.yml
-      - --storage.path=/alertmanager
-    ports:
-      - "127.0.0.1:19093:9093"
-    volumes:
-      - ./demo/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
-      - alertmanager-data:/alertmanager
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9093/-/healthy"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  traffic-generator:
-    image: localhost/oncall-demo:1.0.0
-    container_name: oncall-traffic
-    command: ["python", "/app/traffic.py"]
-    environment:
-      DEMO_URL: http://demo-service:8080/api/orders
-    depends_on:
-      demo-service:
-        condition: service_healthy
-    restart: unless-stopped
+      ETCD_USE_EMBED: "true"
+      COMMON_STORAGETYPE: local
+    ports: ["127.0.0.1:19530:19530"]
+    volumes: ["milvus-data:/var/lib/milvus"]
 
   api:
     build:
       context: .
       dockerfile: containers/api.Containerfile
-    image: localhost/oncall-api:1.0.1
-    container_name: oncall-api
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://oncall:oncall@postgres:5432/oncall
       REDIS_URL: redis://redis:6379/0
       MILVUS_URI: http://milvus:19530
-      OBSERVABILITY_MCP_URL: http://observability-mcp:8081/mcp
-      RELEASE_MCP_URL: http://release-mcp:8082/mcp
-      PYTHONPATH: /app/src
-    volumes: ["./src:/app/src:ro"]
+      RECOVERY_MCP_URL: http://recovery-mcp:8080/mcp
+    command: ["python", "-m", "uvicorn", "oncall.api.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
     ports: ["127.0.0.1:8000:8000"]
-    depends_on:
-      postgres: { condition: service_healthy }
-      redis: { condition: service_healthy }
-      milvus: { condition: service_healthy }
-    healthcheck:
-      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health/ready')"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+    depends_on: [postgres, redis, milvus]
 
   worker:
-    image: localhost/oncall-api:1.0.1
-    container_name: oncall-worker
-    command: ["python", "-m", "celery", "-A", "oncall.jobs.celery_app:celery_app", "worker", "--loglevel=INFO"]
+    build:
+      context: .
+      dockerfile: containers/api.Containerfile
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://oncall:oncall@postgres:5432/oncall
       REDIS_URL: redis://redis:6379/0
       MILVUS_URI: http://milvus:19530
-      OBSERVABILITY_MCP_URL: http://observability-mcp:8081/mcp
-      RELEASE_MCP_URL: http://release-mcp:8082/mcp
-      PYTHONPATH: /app/src
-    volumes: ["./src:/app/src:ro"]
-    depends_on:
-      api: { condition: service_healthy }
+      RECOVERY_MCP_URL: http://recovery-mcp:8080/mcp
+    command: ["python", "-m", "celery", "-A", "oncall.jobs.celery_app:celery_app", "worker", "--loglevel=INFO"]
+    depends_on: [postgres, redis, milvus, recovery-mcp]
 
-  observability-mcp:
-    image: localhost/oncall-api:1.0.1
-    container_name: oncall-observability-mcp
-    command: ["python", "-m", "uvicorn", "mcp_servers.observability.server:app", "--host", "0.0.0.0", "--port", "8081"]
+  recovery-mcp:
+    build:
+      context: .
+      dockerfile: containers/api.Containerfile
     env_file: .env
     environment:
-      OBSERVABILITY_PROMETHEUS_URL: http://prometheus:9090
-      OBSERVABILITY_ALERTMANAGER_URL: http://alertmanager:9093
-      OBSERVABILITY_SERVICE_URL: http://demo-service:8080
-      PYTHONPATH: /app/src
-    volumes:
-      - "./.runtime:/app/.runtime:ro"
-      - "./src:/app/src:ro"
-      - "./mcp_servers:/app/mcp_servers:ro"
-    depends_on:
-      prometheus: { condition: service_healthy }
-      alertmanager: { condition: service_healthy }
-    healthcheck:
-      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8081/health/ready')"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-  release-mcp:
-    image: localhost/oncall-api:1.0.1
-    container_name: oncall-release-mcp
-    command: ["python", "-m", "uvicorn", "mcp_servers.release.server:app", "--host", "0.0.0.0", "--port", "8082"]
-    env_file: .env
-    environment:
-      PYTHONPATH: /app/src
-    volumes:
-      - "./.runtime:/app/.runtime:ro"
-      - "./src:/app/src:ro"
-      - "./mcp_servers:/app/mcp_servers:ro"
-    healthcheck:
-      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8082/health/ready')"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+      REDIS_URL: redis://redis:6379/0
+    command: ["python", "-m", "uvicorn", "mcp_servers.recovery.server:app", "--host", "0.0.0.0", "--port", "8080"]
+    ports: ["127.0.0.1:8080:8080"]
+    depends_on: [redis]
 
   frontend:
     build:
       context: .
       dockerfile: containers/frontend.Containerfile
-    image: localhost/oncall-frontend:1.0.0
-    container_name: oncall-frontend
     ports: ["127.0.0.1:5173:80"]
-    depends_on:
-      api: { condition: service_healthy }
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/ || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+    depends_on: [api]
 
 volumes:
   postgres-data:
   redis-data:
-  etcd-data:
-  minio-data:
   milvus-data:
-  prometheus-data:
-  alertmanager-data:

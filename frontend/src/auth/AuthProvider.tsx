@@ -1,8 +1,9 @@
-import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ApiClient, type AuthUser } from "../api/client";
 
 type AuthContextValue = {
   user: AuthUser | null;
+  isBootstrapping: boolean;
   client: ApiClient;
   login: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -12,7 +13,9 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
+  const [isBootstrapping, setIsBootstrapping] = useState(true);
   const tokenRef = useRef<string | null>(null);
+  const bootstrapStarted = useRef(false);
   const clear = useCallback(() => {
     tokenRef.current = null;
     setUser(null);
@@ -34,6 +37,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return true;
   }, [clear]);
   const client = useMemo(() => new ApiClient(() => tokenRef.current, refresh, clear), [clear, refresh]);
+  useEffect(() => {
+    // React StrictMode runs effects twice in development. A refresh token is
+    // rotating, so bootstrap must remain a single request.
+    if (bootstrapStarted.current) return;
+    bootstrapStarted.current = true;
+    void refresh().finally(() => setIsBootstrapping(false));
+  }, [refresh]);
   const login = useCallback(async (username: string, password: string) => {
     const payload = await client.request<{ access_token: string; user: AuthUser }>("/api/v1/auth/login", {
       method: "POST",
@@ -41,13 +51,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     tokenRef.current = payload.access_token;
     setUser(payload.user);
+    setIsBootstrapping(false);
   }, [client]);
   const logout = useCallback(async () => {
     const csrf = document.cookie.split("; ").find((item) => item.startsWith("csrf_token="))?.split("=")[1];
     await fetch("/api/v1/auth/logout", { method: "POST", credentials: "include", headers: csrf ? { "X-CSRF-Token": csrf } : {} });
     clear();
   }, [clear]);
-  return <AuthContext.Provider value={{ user, client, login, logout }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{ user, isBootstrapping, client, login, logout }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthContextValue {

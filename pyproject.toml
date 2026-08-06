@@ -31,11 +31,7 @@ dependencies = [
     "PyYAML",
     "mem0ai",
     "greenlet",
-]
-
-[project.optional-dependencies]
-dev = [
-    "podman-compose>=1.6,<2",
+    "tencentcloud-sdk-python-tat>=3.1.106,<4",
 ]
 
 [project.scripts]

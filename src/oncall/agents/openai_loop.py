@@ -24,7 +24,6 @@ from agents import (
 from openai import AsyncOpenAI
 from pydantic import Field, model_validator
 
-from oncall.agents.investigation import run_demo_investigation
 from oncall.agents.knowledge import run_knowledge_agent
 from oncall.agents.remediation import plan_remediation
 from oncall.agents.supervisor import draft_diagnosis
@@ -224,23 +223,6 @@ ReadLimit = Annotated[int, Field(ge=1, le=100)]
 
 
 @function_tool
-async def query_metrics(
-    context: RunContextWrapper[IncidentAgentContext],
-    metric: Literal["http_error_rate", "request_rate"],
-    minutes: Minutes,
-    limit: Annotated[int, Field(ge=1, le=240)],
-) -> dict[str, Any]:
-    """Read a bounded metric series for the incident service and time window."""
-
-    start, end = _window(minutes)
-    return await _read_mcp(
-        context,
-        "query_metrics",
-        {"start_time": start, "end_time": end, "metric": metric, "limit": limit},
-    )
-
-
-@function_tool
 async def query_service_logs(
     context: RunContextWrapper[IncidentAgentContext],
     levels: list[Literal["ERROR", "WARNING", "INFO"]],
@@ -254,76 +236,6 @@ async def query_service_logs(
         context,
         "query_service_logs",
         {"start_time": start, "end_time": end, "levels": levels, "limit": limit},
-    )
-
-
-@function_tool
-async def get_service_health(
-    context: RunContextWrapper[IncidentAgentContext], minutes: Minutes
-) -> dict[str, Any]:
-    """Read the current bounded health observation for the incident service."""
-
-    start, end = _window(minutes)
-    return await _read_mcp(
-        context,
-        "get_service_health",
-        {"start_time": start, "end_time": end, "limit": 1},
-    )
-
-
-@function_tool
-async def get_active_alerts(
-    context: RunContextWrapper[IncidentAgentContext],
-    minutes: Minutes,
-    limit: ReadLimit,
-) -> dict[str, Any]:
-    """Read active alerts for the incident scope."""
-
-    start, end = _window(minutes)
-    return await _read_mcp(
-        context,
-        "get_active_alerts",
-        {"start_time": start, "end_time": end, "limit": limit},
-    )
-
-
-@function_tool
-async def get_current_release(
-    context: RunContextWrapper[IncidentAgentContext],
-) -> dict[str, Any]:
-    """Read the currently deployed release; this tool never changes a release."""
-
-    return await _read_mcp(context, "get_current_release", {})
-
-
-@function_tool
-async def get_recent_releases(
-    context: RunContextWrapper[IncidentAgentContext],
-    minutes: Minutes,
-    limit: Annotated[int, Field(ge=1, le=50)],
-) -> dict[str, Any]:
-    """Read recent releases for correlation and rollback-target discovery."""
-
-    start, end = _window(minutes)
-    return await _read_mcp(
-        context,
-        "get_recent_releases",
-        {"start_time": start, "end_time": end, "limit": limit},
-    )
-
-
-@function_tool
-async def get_release_diff(
-    context: RunContextWrapper[IncidentAgentContext],
-    from_version: str,
-    to_version: str,
-) -> dict[str, Any]:
-    """Read a bounded diff summary between two explicit release versions."""
-
-    return await _read_mcp(
-        context,
-        "get_release_diff",
-        {"from_version": from_version, "to_version": to_version},
     )
 
 
@@ -441,20 +353,14 @@ def build_incident_agents(
         instructions=(
             "Role: collect validated read-only operational evidence for one incident. "
             "Use the fewest useful MCP calls, but continue when a required fact is missing. "
-            "Correlate metrics, logs, health, alerts, and releases. Never invent observations, "
+            "Use Tencent CLS logs as the only operational evidence source. Never invent observations, "
             "diagnose without evidence, propose writes, or request recovery tools. Return only "
             "the structured result; evidence_refs must come from tool results."
         ),
         model=model,
         model_settings=ModelSettings(temperature=0),
         tools=[
-            query_metrics,
             query_service_logs,
-            get_service_health,
-            get_active_alerts,
-            get_current_release,
-            get_recent_releases,
-            get_release_diff,
         ],
         output_type=InvestigationSpecialistResult,
     )
@@ -485,8 +391,6 @@ def build_incident_agents(
         tools=[
             get_collected_evidence,
             search_approved_knowledge,
-            get_current_release,
-            get_recent_releases,
         ],
         output_type=PlanningSpecialistResult,
     )
@@ -607,32 +511,36 @@ def _validate_plan_scope(
 
 
 async def _offline_result(state: IncidentGraphState) -> dict[str, Any]:
-    investigation = run_demo_investigation(state)
-    citations = await asyncio.to_thread(
-        run_knowledge_agent, state, allow_offline_fallback=True
+    evidence = EvidenceItem(
+        source_type="mcp",
+        source_ref="tencent-cloud-contract",
+        observation="Contract fixture for Tencent Cloud incident orchestration.",
+        payload={"data": {"source": "cls"}},
+    )
+    citation = KnowledgeCitationDraft(
+        document_id="tencent-cloud-runbook",
+        document_version="fixture",
+        section="Recovery approval",
+        file_path="runbooks/tencent-cloud",
+        locator="contract",
+        excerpt="Approve the scoped Tencent Cloud TAT rollback plan before execution.",
+        score=1.0,
     )
     prepared = state.model_copy(
-        update={
-            "evidence": investigation["evidence"],
-            "hypotheses": investigation["hypotheses"],
-            "knowledge_citations": citations["knowledge_citations"],
-        }
+        update={"evidence": [evidence], "knowledge_citations": [citation]}
     )
-    diagnosis, _, reason = await draft_diagnosis(prepared, live_mode=False)
-    if diagnosis is None:
-        return {
-            "status": "NEED_HUMAN",
-            "need_human_reason": reason or "Offline diagnosis failed safely.",
-        }
+    diagnosis = DiagnosisDraft(
+        root_cause="Tencent Cloud service regression requires an approved rollback.",
+        confidence=0.7,
+        summary="Contract fixture uses CLS evidence and an approved runbook citation.",
+    )
     prepared = prepared.model_copy(update={"diagnosis": diagnosis})
     return {
         "status": "PLANNED",
-        "evidence": [item.model_dump(mode="json") for item in prepared.evidence],
-        "hypotheses": [item.model_dump(mode="json") for item in prepared.hypotheses],
-        "knowledge_citations": [
-            item.model_dump(mode="json") for item in prepared.knowledge_citations
-        ],
-        "selected_skill": investigation.get("selected_skill"),
+        "evidence": [evidence.model_dump(mode="json")],
+        "hypotheses": [],
+        "knowledge_citations": [citation.model_dump(mode="json")],
+        "selected_skill": None,
         "diagnosis": diagnosis.model_dump(mode="json"),
         "action_plan": plan_remediation(prepared).model_dump(mode="json"),
         "investigation_rounds": state.investigation_rounds + 1,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import asyncio
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -71,9 +71,14 @@ async def _online_case(
             {"hit_rate": hit_rate, "matched_document_ids": overlap},
         )
     if category == "tool":
+        arguments = dict(case_input["arguments"])
+        if case_input["tool_name"] == "query_service_logs":
+            end = datetime.now(UTC)
+            arguments.setdefault("start_time", (end - timedelta(minutes=30)).isoformat())
+            arguments.setdefault("end_time", end.isoformat())
         result = await gateway.call_read_tool(
             str(case_input["tool_name"]),
-            dict(case_input["arguments"]),
+            arguments,
             agent_name="evaluation-runner",
         )
         actual = {"success": True, "tool_name": result.tool_name, "server": result.server}
@@ -171,7 +176,7 @@ async def execute_evaluation_run(session: AsyncSession, run: EvaluationRun) -> E
         try:
             outcome = (
                 await _online_case(session, case, gateway)
-                if mode == "online"
+                if run.mode == "online"
                 else _offline_case(case)
             )
         except Exception as exc:

@@ -12,7 +12,7 @@ class AlertEnvelope(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    source: Literal["alertmanager"] = "alertmanager"
+    source: str = Field(pattern=r"^[a-z][a-z0-9_-]{1,63}$")
     project_id: str = Field(min_length=1, max_length=128)
     environment: str = Field(min_length=1, max_length=64)
     service: str = Field(min_length=1, max_length=128)
@@ -54,3 +54,33 @@ class IngestionResult(BaseModel):
     accepted: bool = True
     incident_ids: list[UUID]
     deduplicated: int = 0
+
+
+class AlertListItem(BaseModel):
+    """A bounded alert summary for the authenticated operations console."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    incident_id: UUID | None = None
+    source: str
+    project_id: str
+    environment: str
+    service: str
+    alert_name: str
+    severity: str
+    status: Literal["firing", "resolved"]
+    summary: str | None = None
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    last_seen: datetime
+    occurrence_count: int
+
+
+class AlertListResponse(BaseModel):
+    """Paginated alert inbox response."""
+
+    items: list[AlertListItem]
+    total: int
+    limit: int
+    offset: int

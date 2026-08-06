@@ -12,10 +12,10 @@ def _state():
         incident_id=str(uuid4()),
         graph_run_id="incident:test:attempt:1",
         status="INVESTIGATING",
-        project_id="demo-shop",
-        environment="staging",
-        service="order-api",
-        alert_summary="HighErrorRate after release v2",
+        project_id="payments",
+        environment="prod",
+        service="checkout",
+        alert_summary="腾讯云监控报告 checkout 错误率升高",
         created_at=datetime.now(timezone.utc),
     )
 
@@ -55,8 +55,8 @@ class FakeRunner:
         context.evidence.append(
             EvidenceItem(
                 source_type="mcp",
-                source_ref="get_current_release:call-1",
-                observation="Validated current release",
+                source_ref="query_service_logs:call-1",
+                observation="Validated Tencent CLS release log",
                 payload={
                     "data": {
                         "release": {"version": "v2"},
@@ -87,13 +87,13 @@ class FakeRunner:
             supporting_summary=diagnosis.summary,
         )
         plan = ActionPlanDraft(
-            summary="Rollback order-api from v2 to v1 after approval.",
+            summary="Rollback checkout from v2 to v1 after approval.",
             risk_level="medium",
             prerequisites=["Human approval of the exact plan hash."],
             rollback=RollbackReleaseAction(
-                project_id="other-project" if self.wrong_scope else "demo-shop",
-                environment="staging",
-                service="order-api",
+                project_id="other-project" if self.wrong_scope else "payments",
+                environment="prod",
+                service="checkout",
                 current_version="v2",
                 target_version="v1",
             ),
@@ -149,13 +149,13 @@ class OpenAIAgentLoopTest(unittest.TestCase):
         context = IncidentAgentContext(
             state=_state(),
             gateway=gateway,
-            allowed_read_tools=frozenset({"get_current_release"}),
+            allowed_read_tools=frozenset({"query_service_logs"}),
             max_tool_calls=1,
         )
         result = asyncio.run(
             _read_mcp(
                 RunContextWrapper(context=context),
-                "get_current_release",
+                "query_service_logs",
                 {
                     "project_id": "attacker-project",
                     "environment": "production",
@@ -164,9 +164,9 @@ class OpenAIAgentLoopTest(unittest.TestCase):
             )
         )
         self.assertTrue(result["ok"])
-        self.assertEqual(gateway.arguments["project_id"], "demo-shop")
-        self.assertEqual(gateway.arguments["environment"], "staging")
-        self.assertEqual(gateway.arguments["service"], "order-api")
+        self.assertEqual(gateway.arguments["project_id"], "payments")
+        self.assertEqual(gateway.arguments["environment"], "prod")
+        self.assertEqual(gateway.arguments["service"], "checkout")
 
     def test_returns_plan_to_langgraph_without_approval_or_execution(self):
         from oncall.agents.openai_loop import run_incident_agent_loop

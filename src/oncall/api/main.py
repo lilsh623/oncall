@@ -10,14 +10,17 @@ from fastapi import FastAPI, Request, Response
 from prometheus_client import Counter, Histogram
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from oncall.alerts.read_router import router as alert_reads_router
+from oncall.alerts.router import router as alerts_router
 from oncall.auth.admin_router import router as admin_router
 from oncall.auth.router import router as auth_router
-from oncall.alerts.router import router as alerts_router
-from oncall.incidents.router import router as incidents_router
-from oncall.experience.router import router as experiences_router
 from oncall.conversation.router import router as conversations_router
 from oncall.evaluation.router import router as evaluations_router
+from oncall.experience.router import router as experiences_router
+from oncall.incidents.router import router as incidents_router
 from oncall.logging import configure_logging
+from oncall.operations.router import router as operations_router
+from oncall.projects.router import router as projects_router
 from oncall.skills.registry import get_skill_registry
 
 
@@ -87,10 +90,13 @@ def create_app() -> FastAPI:
     app.include_router(auth_router)
     app.include_router(admin_router)
     app.include_router(alerts_router)
+    app.include_router(alert_reads_router)
     app.include_router(incidents_router)
     app.include_router(experiences_router)
     app.include_router(conversations_router)
     app.include_router(evaluations_router)
+    app.include_router(operations_router)
+    app.include_router(projects_router)
 
     @app.get("/health/live")
     async def live() -> dict[str, str]:

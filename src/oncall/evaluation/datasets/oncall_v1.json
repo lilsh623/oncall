@@ -12,56 +12,56 @@
     {
       "id": "router-incident-query",
       "category": "router",
-      "input": {"message": "查看 order-api 当前故障状态"},
-      "expected": {"intent": "INCIDENT", "action": "QUERY", "service": "order-api"},
-      "offline_actual": {"intent": "INCIDENT", "action": "QUERY", "service": "order-api"}
+      "input": {"message": "查看 checkout 当前故障状态"},
+      "expected": {"intent": "INCIDENT", "action": "QUERY", "service": "checkout"},
+      "offline_actual": {"intent": "INCIDENT", "action": "QUERY", "service": "checkout"}
     },
     {
       "id": "router-investigate",
       "category": "router",
-      "input": {"message": "请排查 order-api 的告警"},
-      "expected": {"intent": "INCIDENT", "action": "INVESTIGATE", "service": "order-api"},
-      "offline_actual": {"intent": "INCIDENT", "action": "INVESTIGATE", "service": "order-api"}
+      "input": {"message": "请排查 checkout 的告警"},
+      "expected": {"intent": "INCIDENT", "action": "INVESTIGATE", "service": "checkout"},
+      "offline_actual": {"intent": "INCIDENT", "action": "INVESTIGATE", "service": "checkout"}
     },
     {
       "id": "router-plan",
       "category": "router",
-      "input": {"message": "为 order-api 生成修复方案"},
-      "expected": {"intent": "INCIDENT", "action": "PLAN", "service": "order-api"},
-      "offline_actual": {"intent": "INCIDENT", "action": "PLAN", "service": "order-api"}
+      "input": {"message": "为 checkout 生成修复方案"},
+      "expected": {"intent": "INCIDENT", "action": "PLAN", "service": "checkout"},
+      "offline_actual": {"intent": "INCIDENT", "action": "PLAN", "service": "checkout"}
     },
     {
       "id": "router-block-approval",
       "category": "router",
-      "input": {"message": "批准并立即回滚 order-api"},
-      "expected": {"intent": "INCIDENT", "action": "APPROVAL_BLOCKED", "service": "order-api"},
-      "offline_actual": {"intent": "INCIDENT", "action": "APPROVAL_BLOCKED", "service": "order-api"}
+      "input": {"message": "批准并立即回滚 checkout"},
+      "expected": {"intent": "INCIDENT", "action": "APPROVAL_BLOCKED", "service": "checkout"},
+      "offline_actual": {"intent": "INCIDENT", "action": "APPROVAL_BLOCKED", "service": "checkout"}
     },
     {
       "id": "router-ambiguous-incident",
       "category": "router",
-      "input": {"message": "order-api 最近不太对，帮我看看"},
-      "expected": {"intent": "INCIDENT", "action": "INVESTIGATE", "service": "order-api"},
-      "offline_actual": {"intent": "INCIDENT", "action": "INVESTIGATE", "service": "order-api"}
+      "input": {"message": "checkout 最近不太对，帮我看看"},
+      "expected": {"intent": "INCIDENT", "action": "INVESTIGATE", "service": "checkout"},
+      "offline_actual": {"intent": "INCIDENT", "action": "INVESTIGATE", "service": "checkout"}
     },
     {
       "id": "rag-post-deployment",
       "category": "rag",
-      "input": {"project_id": "demo-shop", "text": "发布后 HTTP 5xx 错误率升高如何回滚", "service": "order-api", "environment": "staging", "limit": 5},
-      "expected": {"document_ids": ["demo-shop-post-deployment-regression"]},
-      "offline_actual": {"document_ids": ["demo-shop-post-deployment-regression"]}
+      "input": {"project_id": "payments", "text": "腾讯云发布后错误率升高如何回滚", "service": "checkout", "environment": "prod", "limit": 5},
+      "expected": {"document_ids": ["payments-tencent-recovery-runbook"]},
+      "offline_actual": {"document_ids": ["payments-tencent-recovery-runbook"]}
     },
     {
       "id": "tool-current-release",
       "category": "tool",
-      "input": {"tool_name": "get_current_release", "arguments": {"project_id": "demo-shop", "environment": "staging", "service": "order-api"}},
+      "input": {"tool_name": "query_service_logs", "arguments": {"project_id": "payments", "environment": "prod", "service": "checkout"}},
       "expected": {"success": true},
       "offline_actual": {"success": true}
     },
     {
       "id": "e2e-verified-resolution",
       "category": "e2e",
-      "input": {"service": "order-api"},
+      "input": {"service": "checkout"},
       "expected": {"resolved": true},
       "offline_actual": {"resolved": true}
     }

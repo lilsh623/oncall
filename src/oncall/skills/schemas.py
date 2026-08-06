@@ -7,15 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-SkillToolName = Literal[
-    "query_metrics",
-    "query_service_logs",
-    "get_service_health",
-    "get_active_alerts",
-    "get_current_release",
-    "get_recent_releases",
-    "get_release_diff",
-]
+SkillToolName = Literal["query_service_logs"]
 
 
 class JsonSchemaArrayItems(BaseModel):

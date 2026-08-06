@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from oncall.config import get_settings
 from oncall.mcp_gateway.client import McpGateway
-from oncall.mcp_gateway.schemas import MetricName
+from oncall.mcp_gateway.schemas import LogLevel
 from oncall.models import Incident
 
 
@@ -29,11 +29,7 @@ async def verify_recovery(
     gateway: McpGateway | None = None,
     wait_seconds: float | None = None,
 ) -> VerificationResult:
-    """Wait one scrape period, then verify release, health, and 5xx ratio.
-
-    The function has no Recovery MCP or Podman access. Any unavailable read-only
-    observation fails verification and returns the Incident to a human.
-    """
+    """Verify recovery by checking the post-action Tencent Cloud CLS error logs."""
 
     delay = (
         wait_seconds
@@ -51,34 +47,17 @@ async def verify_recovery(
     now = datetime.now(timezone.utc)
     checks: list[dict[str, object]] = []
     try:
-        release, health, metrics = await asyncio.gather(
-            client.call_read_tool(
-                "get_current_release", scope, incident_id=str(incident.id), agent_name="verification"
-            ),
-            client.call_read_tool(
-                "get_service_health",
-                {
-                    **scope,
-                    "start_time": now - timedelta(minutes=5),
-                    "end_time": now,
-                    "limit": 1,
-                },
-                incident_id=str(incident.id),
-                agent_name="verification",
-            ),
-            client.call_read_tool(
-                "query_metrics",
-                {
-                    **scope,
-                    "start_time": now - timedelta(minutes=5),
-                    "end_time": now,
-                    "metric": MetricName.HTTP_ERROR_RATE,
-                    "rate_window_seconds": 30,
-                    "limit": 30,
-                },
-                incident_id=str(incident.id),
-                agent_name="verification",
-            ),
+        logs = await client.call_read_tool(
+            "query_service_logs",
+            {
+                **scope,
+                "start_time": now - timedelta(minutes=5),
+                "end_time": now,
+                "levels": (LogLevel.ERROR,),
+                "limit": 100,
+            },
+            incident_id=str(incident.id),
+            agent_name="verification",
         )
     except Exception:
         return VerificationResult(
@@ -87,34 +66,20 @@ async def verify_recovery(
             reason="Required read-only recovery verification data is unavailable.",
         )
 
-    release_version = ((release.data.get("release") or {}).get("version"))
-    release_ok = release_version == "v1"
-    checks.append(
-        {"name": "release_version", "status": "passed" if release_ok else "failed", "value": release_version}
-    )
-    health_status = health.data.get("status")
-    health_ok = health_status == "healthy"
-    checks.append(
-        {"name": "service_health", "status": "passed" if health_ok else "failed", "value": health_status}
-    )
-    points = metrics.data.get("points")
-    numeric_points = [
-        float(point["value"])
-        for point in points if isinstance(point, dict) and point.get("value") is not None
-    ] if isinstance(points, list) else []
-    error_rate = numeric_points[-1] if numeric_points else None
-    error_ok = error_rate is not None and error_rate < 0.05
+    entries = logs.data.get("entries")
+    error_count = len(entries) if isinstance(entries, list) else 0
+    error_ok = error_count == 0
     checks.append(
         {
-            "name": "http_error_rate",
+            "name": "cls_error_logs",
             "status": "passed" if error_ok else "failed",
-            "value": error_rate,
-            "threshold": 0.05,
+            "value": error_count,
+            "threshold": 0,
         }
     )
-    passed = release_ok and health_ok and error_ok
+    passed = error_ok
     return VerificationResult(
         passed=passed,
         checks=checks,
-        reason=None if passed else "Release, health, or error-rate verification did not pass.",
+        reason=None if passed else "Tencent Cloud CLS still reports error logs after recovery.",
     )

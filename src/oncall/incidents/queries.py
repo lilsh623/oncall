@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from oncall.incidents.schemas import (
@@ -19,8 +19,10 @@ from oncall.models import (
     ActionPlan,
     ActionStep,
     Alert,
+    AlertIntegration,
     Approval,
     AuditEvent,
+    CloudProject,
     Evidence,
     Execution,
     Hypothesis,
@@ -29,6 +31,22 @@ from oncall.models import (
     KnowledgeCitation,
     VerificationCheck,
 )
+
+
+def _active_tencent_scope(column_project, column_environment, column_service):
+    return exists(
+        select(1)
+        .select_from(AlertIntegration)
+        .join(CloudProject, CloudProject.id == AlertIntegration.cloud_project_id)
+        .where(
+            AlertIntegration.status == "active",
+            AlertIntegration.source.in_(("tencent_monitor", "tencent_cls")),
+            CloudProject.status == "active",
+            CloudProject.project_id == column_project,
+            AlertIntegration.environment == column_environment,
+            AlertIntegration.service == column_service,
+        )
+    )
 
 
 def _bounded_value(value: Any, *, string_limit: int = 2048) -> Any:
@@ -55,7 +73,13 @@ async def list_incidents(
     limit: int = 50,
     offset: int = 0,
 ) -> IncidentListResponse:
-    statement = select(Incident).order_by(Incident.opened_at.desc()).offset(offset).limit(limit)
+    statement = (
+        select(Incident)
+        .where(_active_tencent_scope(Incident.project_id, Incident.environment, Incident.service))
+        .order_by(Incident.opened_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
     if severity is not None:
         statement = statement.join(IncidentAlert).join(Alert).where(Alert.severity == severity)
     if status is not None:
@@ -153,7 +177,12 @@ async def incident_event_by_id(
 
 
 async def get_incident_detail(session: AsyncSession, incident_id: UUID) -> IncidentDetail | None:
-    incident = await session.get(Incident, incident_id)
+    incident = await session.scalar(
+        select(Incident).where(
+            Incident.id == incident_id,
+            _active_tencent_scope(Incident.project_id, Incident.environment, Incident.service),
+        )
+    )
     if incident is None:
         return None
     alerts = (

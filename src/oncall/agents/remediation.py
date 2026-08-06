@@ -8,8 +8,8 @@ from oncall.graph.contracts import ActionPlanDraft, IncidentGraphState, Rollback
 def plan_remediation(state: IncidentGraphState) -> ActionPlanDraft:
     """Create a human-approved rollback plan; never executes recovery."""
 
-    current_version = "v2"
-    target_version = "v1"
+    current_version = "current"
+    target_version = "previous-stable"
     for evidence in state.evidence:
         data = evidence.payload.get("data") if isinstance(evidence.payload, dict) else None
         payload = data if isinstance(data, dict) else evidence.payload
@@ -21,7 +21,7 @@ def plan_remediation(state: IncidentGraphState) -> ActionPlanDraft:
         if isinstance(payload, dict) and payload.get("previous_healthy_version"):
             target_version = str(payload["previous_healthy_version"])
     if current_version == target_version:
-        target_version = "v1"
+        target_version = "previous-stable"
     return ActionPlanDraft(
         summary=f"Rollback {state.service} from {current_version} to {target_version} after human approval.",
         risk_level="medium",
@@ -37,7 +37,7 @@ def plan_remediation(state: IncidentGraphState) -> ActionPlanDraft:
             target_version=target_version,
         ),
         verification_criteria=[
-            "Service health endpoint is healthy.",
-            "HTTP 5xx error rate falls below the HighErrorRate threshold.",
+            "Tencent Cloud TAT reports a successful invocation.",
+            "Tencent Cloud CLS contains no new ERROR logs after the recovery window.",
         ],
     )

@@ -7,13 +7,13 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 
-_ALERTMANAGER_FINGERPRINT = re.compile(r"^[0-9a-fA-F]{16,64}$")
+_VENDOR_FINGERPRINT = re.compile(r"^[0-9a-fA-F]{16,64}$")
 
 
 def valid_source_fingerprint(value: object) -> str | None:
-    """Return a normalized Alertmanager fingerprint when it is well formed."""
+    """Return a normalized vendor fingerprint when it is well formed."""
 
-    if not isinstance(value, str) or not _ALERTMANAGER_FINGERPRINT.fullmatch(value):
+    if not isinstance(value, str) or not _VENDOR_FINGERPRINT.fullmatch(value):
         return None
     return value.lower()
 

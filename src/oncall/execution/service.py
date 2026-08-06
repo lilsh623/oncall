@@ -8,7 +8,7 @@ import json
 import time
 from datetime import datetime, timezone
 from hashlib import sha256
-from typing import Any, Literal
+from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
@@ -22,8 +22,7 @@ from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from oncall.config import get_settings
 from oncall.database import async_session
 from oncall.incidents.state import IncidentStatus, ensure_transition
-from oncall.mcp_gateway.client import McpGateway
-from oncall.models import ActionPlan, ActionStep, Approval, Execution, Incident
+from oncall.models import ActionPlan, ActionStep, Approval, CloudProject, CloudService, Execution, Incident
 from oncall.policy.engine import evaluate_action_plan
 
 
@@ -32,11 +31,11 @@ class RecoveryRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project_id: Literal["demo-shop"]
-    environment: Literal["staging"]
-    service: Literal["order-api"]
-    current_version: Literal["v2"]
-    target_version: Literal["v1"]
+    project_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,63}$")
+    environment: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,63}$")
+    service: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,127}$")
+    current_version: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+    target_version: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     action_plan_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     approval_id: UUID
     nonce: str = Field(min_length=16, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
@@ -55,40 +54,6 @@ class ExecutionResult(BaseModel):
 
 class RecoveryMcpError(RuntimeError):
     """A bounded, non-sensitive failure from the separate Recovery MCP."""
-
-
-def create_approval_proof(
-    plan: ActionPlan,
-    approval: Approval,
-    nonce: str | None = None,
-    *,
-    secret: str | None = None,
-) -> dict[str, object]:
-    """Sign the immutable approval facts; user JWTs are never forwarded."""
-
-    issued_at = int(time.time())
-    nonce_value = nonce or uuid4().hex
-    rollback = plan.rollback
-    payload = ":".join(
-        [
-            str(rollback["project_id"]),
-            str(rollback["environment"]),
-            str(rollback["service"]),
-            str(rollback["current_version"]),
-            str(rollback["target_version"]),
-            plan.plan_hash,
-            str(approval.id),
-            nonce_value,
-            str(issued_at),
-        ]
-    )
-    key = (
-        secret
-        if secret is not None
-        else get_settings().recovery_approval_secret.get_secret_value()
-    ).encode("utf-8")
-    proof = hmac.new(key, payload.encode("utf-8"), sha256).hexdigest()
-    return {"nonce": nonce_value, "issued_at": issued_at, "approval_proof": proof}
 
 
 def _mcp_endpoint(url: str) -> str:
@@ -131,7 +96,12 @@ def _structured_content(result: Any) -> dict[str, Any]:
     return payload
 
 
-async def _call_recovery_mcp(request: RecoveryRequest) -> dict[str, Any]:
+async def _call_recovery_mcp(
+    request: RecoveryRequest,
+    *,
+    tool_name: str = "rollback_release",
+    tencent_tat: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     settings = get_settings()
     url = settings.recovery_mcp_url
     service_secret = settings.recovery_mcp_secret.get_secret_value()
@@ -146,10 +116,12 @@ async def _call_recovery_mcp(request: RecoveryRequest) -> dict[str, Any]:
                 ) as (read_stream, write_stream, _):
                     async with ClientSession(read_stream, write_stream) as client:
                         await client.initialize()
-                        result = await client.call_tool(
-                            "rollback_release",
-                            {"request": request.model_dump(mode="json")},
-                        )
+                        arguments: dict[str, Any] = {
+                            "request": request.model_dump(mode="json")
+                        }
+                        if tencent_tat is not None:
+                            arguments["tencent_tat"] = tencent_tat
+                        result = await client.call_tool(tool_name, arguments)
     except TimeoutError as exc:
         raise TimeoutError("Recovery MCP call timed out") from exc
     except Exception as exc:
@@ -162,23 +134,39 @@ async def _call_recovery_mcp(request: RecoveryRequest) -> dict[str, Any]:
     return payload
 
 
-async def _current_release_after_timeout(incident: Incident) -> dict[str, Any]:
-    """Observe state after a timeout; this is diagnostic only and never retries."""
+def create_approval_proof(
+    plan: ActionPlan,
+    approval: Approval,
+    *,
+    nonce: str | None = None,
+    issued_at: int | None = None,
+    secret: str | None = None,
+) -> dict[str, object]:
+    """Sign immutable approval facts before crossing the Recovery MCP boundary."""
 
-    try:
-        result = await McpGateway().call_read_tool(
-            "get_current_release",
-            {
-                "project_id": incident.project_id,
-                "environment": incident.environment,
-                "service": incident.service,
-            },
-            incident_id=str(incident.id),
-            agent_name="recovery-timeout-check",
-        )
-        return {"current_release": result.data}
-    except Exception:
-        return {"current_release": "unavailable"}
+    nonce_value = nonce or uuid4().hex
+    issued_value = issued_at if issued_at is not None else int(time.time())
+    rollback = plan.rollback
+    payload = ":".join(
+        [
+            str(rollback["project_id"]),
+            str(rollback["environment"]),
+            str(rollback["service"]),
+            str(rollback["current_version"]),
+            str(rollback["target_version"]),
+            plan.plan_hash,
+            str(approval.id),
+            nonce_value,
+            str(issued_value),
+        ]
+    )
+    key = (
+        secret
+        if secret is not None
+        else get_settings().recovery_approval_secret.get_secret_value()
+    ).encode("utf-8")
+    proof = hmac.new(key, payload.encode("utf-8"), sha256).hexdigest()
+    return {"nonce": nonce_value, "issued_at": issued_value, "approval_proof": proof}
 
 
 def _idempotency_key(plan: ActionPlan, approval: Approval) -> str:
@@ -204,6 +192,9 @@ async def execute_approved_plan(incident_id: UUID, plan_id: UUID) -> ExecutionRe
     after a read-only version check; it is deliberately not retried automatically.
     """
 
+    recovery_provider = "tencent_tat"
+    recovery_tool_name = "rollback_release"
+    tencent_tat: dict[str, Any] | None = None
     async with async_session() as session:
         incident = await session.scalar(
             select(Incident).where(Incident.id == incident_id).with_for_update()
@@ -229,6 +220,26 @@ async def execute_approved_plan(incident_id: UUID, plan_id: UUID) -> ExecutionRe
             return ExecutionResult(
                 execution_id=None, status="NOT_APPROVED", error="matching approved plan is required"
             )
+        service_config: dict[str, Any] | None = None
+        project = await session.scalar(
+            select(CloudProject).where(CloudProject.project_id == incident.project_id)
+        )
+        if project is not None:
+            binding = await session.scalar(
+                select(CloudService).where(
+                    CloudService.cloud_project_id == project.id,
+                    CloudService.environment == incident.environment,
+                    CloudService.service == incident.service,
+                    CloudService.status == "active",
+                )
+            )
+            if binding is not None:
+                service_config = binding.recovery_config
+                recovery_provider = str(service_config.get("provider", recovery_provider))
+                recovery_tool_name = str(service_config.get("tool_name", recovery_tool_name))
+                configured_tat = service_config.get("tencent_tat")
+                if isinstance(configured_tat, dict):
+                    tencent_tat = configured_tat
         decision = evaluate_action_plan(
             {
                 "summary": plan.summary,
@@ -239,9 +250,16 @@ async def execute_approved_plan(incident_id: UUID, plan_id: UUID) -> ExecutionRe
                 "plan_hash": plan.plan_hash,
             },
             incident,
+            recovery_config=service_config,
         )
         if not decision.allowed:
             return ExecutionResult(execution_id=None, status="DENIED", error=decision.reason_code)
+        if recovery_provider == "tencent_tat" and tencent_tat is None:
+            return ExecutionResult(
+                execution_id=None,
+                status="DENIED",
+                error="Tencent TAT recovery configuration is required",
+            )
 
         key = _idempotency_key(plan, approval)
         step = await session.scalar(
@@ -285,17 +303,21 @@ async def execute_approved_plan(incident_id: UUID, plan_id: UUID) -> ExecutionRe
         **create_approval_proof(plan, approval),
     )
     try:
-        response = await _call_recovery_mcp(request)
+        response = await _call_recovery_mcp(
+            request,
+            tool_name=recovery_tool_name,
+            tencent_tat=tencent_tat,
+        )
         execution_status = "SUCCEEDED" if response["status"] == "succeeded" else "FAILED"
         error = None if execution_status == "SUCCEEDED" else "Recovery MCP reported failure"
     except TimeoutError:
-        response = await _current_release_after_timeout(incident)
+        response = {"tencent_tat": "timeout"}
         execution_status = "UNKNOWN"
-        error = "Recovery MCP timed out; automatic retry is prohibited"
+        error = "Tencent Cloud TAT timed out; automatic retry is prohibited"
     except (RecoveryMcpError, ValidationError):
         response = None
         execution_status = "FAILED"
-        error = "Recovery MCP rejected or could not execute the fixed rollback"
+        error = "Tencent Cloud TAT MCP rejected or could not execute the configured action"
 
     async with async_session() as session:
         execution = await session.get(Execution, execution_id, with_for_update=True)

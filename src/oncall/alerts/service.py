@@ -5,9 +5,8 @@ from datetime import UTC, datetime
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from oncall.alerts.adapters.alertmanager import normalize_alertmanager
 from oncall.alerts.correlation import advisory_lock_key
-from oncall.alerts.schemas import AlertEnvelope, AlertIngestionCommand, IngestionResult
+from oncall.alerts.schemas import AlertEnvelope, IngestionResult
 from oncall.audit.service import append_audit_event
 from oncall.incidents.service import (
     find_latest_linked_incident,
@@ -91,21 +90,25 @@ async def _upsert_alert(
     return alert, True, previous_status
 
 
-async def ingest_alerts(
-    session: AsyncSession, raw_payload: AlertIngestionCommand
+async def ingest_normalized_alerts(
+    session: AsyncSession,
+    *,
+    project_id: str,
+    source: str,
+    raw_payload: dict[str, object],
+    envelopes: list[AlertEnvelope],
 ) -> IngestionResult:
-    """Persist a raw webhook, de-duplicate alerts and correlate open Incidents."""
+    """Persist normalized alerts, de-duplicate and correlate open Incidents."""
 
+    if not envelopes:
+        raise ValueError("normalized webhook contains no alerts")
+    if any(item.project_id != project_id or item.source != source for item in envelopes):
+        raise ValueError("normalized alert scope does not match authenticated integration")
     received_at = datetime.now(UTC)
-    envelopes = normalize_alertmanager(
-        raw_payload.payload,
-        raw_payload.project_id,
-        raw_payload.stable_label_names,
-    )
     raw_event = RawAlertEvent(
-        source="alertmanager",
-        project_id=raw_payload.project_id,
-        payload=raw_payload.payload,
+        source=source,
+        project_id=project_id,
+        payload=raw_payload,
         received_at=received_at,
     )
     session.add(raw_event)

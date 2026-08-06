@@ -38,10 +38,12 @@ class SkillRegistry:
         """Validate every manifest and atomically publish the loaded registry."""
 
         if not self._root.is_dir():
-            raise SkillRegistryError(f"project packs root does not exist: {self._root}")
+            self._skills = ()
+            return self._skills
         manifest_paths = sorted(self._root.glob("*/skills/*/skill.yaml"))
         if not manifest_paths:
-            raise SkillRegistryError(f"no Skill manifests found under {self._root}")
+            self._skills = ()
+            return self._skills
 
         loaded: list[SkillDefinition] = []
         identities: set[tuple[str, str]] = set()
@@ -77,8 +79,6 @@ class SkillRegistry:
                 )
             )
 
-        if not loaded:
-            raise SkillRegistryError(f"no valid Skills loaded from {self._root}")
         self._skills = tuple(loaded)
         return self._skills
 

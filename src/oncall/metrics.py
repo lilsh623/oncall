@@ -1,4 +1,4 @@
-"""Prometheus metrics for the Incident lifecycle and bounded recovery flow."""
+"""Application metrics for the Incident lifecycle and bounded recovery flow."""
 
 from prometheus_client import Counter, Histogram
 

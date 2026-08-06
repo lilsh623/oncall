@@ -25,14 +25,14 @@ class ExperienceExtractionTest(unittest.TestCase):
         from oncall.experience.extraction import pattern_fingerprint
 
         first = pattern_fingerprint(
-            project_id="Demo-Shop",
+            project_id="Payments",
             environment="STAGING",
             service="order-api",
             root_cause="Release  v2 introduced a regression",
             action_type="rollback_release",
         )
         second = pattern_fingerprint(
-            project_id=" demo-shop ",
+            project_id=" payments ",
             environment="staging",
             service="ORDER-API",
             root_cause="release v2 introduced a regression",

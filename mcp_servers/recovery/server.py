@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
-import sqlite3
 import time
+from collections.abc import Callable
 from hashlib import sha256
-from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
@@ -16,41 +16,34 @@ from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from redis import Redis
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from mcp_servers.common import BearerAuthMiddleware
-from mcp_servers.recovery.podman_runner import rollback_release as run_rollback_release
-
-
-DEMO_SECRET = "demo-only-recovery-mcp-secret"
-DEMO_APPROVAL_SECRET = "demo-only-recovery-approval-secret"
-NONCE_DB_PATH = Path(__file__).resolve().parents[2] / ".runtime" / "recovery-nonces.sqlite3"
+from oncall.execution.tencent_tat import (
+    TencentTatConfig,
+    TencentTatError,
+    invoke_tencent_tat_rollback,
+)
 
 
 class ServerSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     app_env: Literal["local", "production"] = "local"
-    recovery_mcp_secret: SecretStr = Field(default=SecretStr(DEMO_SECRET), min_length=16)
-    recovery_approval_secret: SecretStr = Field(
-        default=SecretStr(DEMO_APPROVAL_SECRET), min_length=16
-    )
+    recovery_mcp_secret: SecretStr = Field(min_length=16)
+    recovery_approval_secret: SecretStr = Field(min_length=32)
+    redis_url: str
 
     @model_validator(mode="after")
-    def reject_demo_production_secret(self) -> "ServerSettings":
-        if self.app_env == "production" and (
-            self.recovery_mcp_secret.get_secret_value() == DEMO_SECRET
-            or self.recovery_approval_secret.get_secret_value() == DEMO_APPROVAL_SECRET
-        ):
-            raise ValueError("production requires non-demo Recovery MCP secrets")
+    def require_independent_secrets(self) -> "ServerSettings":
         if (
             self.recovery_mcp_secret.get_secret_value()
             == self.recovery_approval_secret.get_secret_value()
         ):
             raise ValueError("Recovery transport and approval secrets must be independent")
         return self
-
 
 SERVER_SETTINGS = ServerSettings()
 WRITE_TOOL = ToolAnnotations(
@@ -67,7 +60,7 @@ mcp = FastMCP(
     json_response=True,
     transport_security=TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
-        allowed_hosts=["127.0.0.1:*", "localhost:*"],
+        allowed_hosts=["127.0.0.1:*", "localhost:*", "recovery-mcp:*"],
     ),
 )
 
@@ -75,11 +68,11 @@ mcp = FastMCP(
 class RollbackReleaseRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    project_id: Literal["demo-shop"]
-    environment: Literal["staging"]
-    service: Literal["order-api"]
-    current_version: Literal["v2"]
-    target_version: Literal["v1"]
+    project_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,63}$")
+    environment: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,63}$")
+    service: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{1,127}$")
+    current_version: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+    target_version: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
     action_plan_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     approval_id: UUID
     nonce: str = Field(min_length=16, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
@@ -103,51 +96,48 @@ def _proof_payload(request: RollbackReleaseRequest) -> str:
     )
 
 
-def _claim_nonce(nonce: str, expires_at: int) -> bool:
-    """Durably reject replays even if the Recovery MCP process is restarted."""
-
-    NONCE_DB_PATH.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with sqlite3.connect(NONCE_DB_PATH, timeout=3.0, isolation_level=None) as connection:
-        connection.execute(
-            "CREATE TABLE IF NOT EXISTS consumed_nonces "
-            "(nonce TEXT PRIMARY KEY, expires_at INTEGER NOT NULL)"
-        )
-        connection.execute("BEGIN IMMEDIATE")
-        try:
-            connection.execute("DELETE FROM consumed_nonces WHERE expires_at < ?", (int(time.time()),))
-            connection.execute(
-                "INSERT INTO consumed_nonces (nonce, expires_at) VALUES (?, ?)",
-                (nonce, expires_at),
-            )
-        except sqlite3.IntegrityError:
-            connection.execute("ROLLBACK")
-            return False
-        connection.execute("COMMIT")
-    return True
+def _claim_nonce(nonce: str) -> bool:
+    try:
+        client = Redis.from_url(SERVER_SETTINGS.redis_url, decode_responses=True)
+        return bool(client.set(f"oncall:recovery:nonce:{nonce}", "1", nx=True, ex=600))
+    except Exception as exc:
+        raise ValueError("approval nonce store is unavailable") from exc
 
 
-def verify_approval_proof(request: RollbackReleaseRequest, secret: str | None = None) -> None:
-    now = int(time.time())
-    if abs(now - request.issued_at) > 300:
+def verify_approval_proof(
+    request: RollbackReleaseRequest,
+    *,
+    secret: str | None = None,
+    claim_nonce: Callable[[str], bool] | None = None,
+) -> None:
+    """Verify freshness, HMAC integrity and one-time use before any TAT write."""
+
+    if abs(int(time.time()) - request.issued_at) > 300:
         raise ValueError("approval proof expired")
-    key = (secret or SERVER_SETTINGS.recovery_approval_secret.get_secret_value()).encode("utf-8")
+    key = (
+        secret
+        if secret is not None
+        else SERVER_SETTINGS.recovery_approval_secret.get_secret_value()
+    ).encode("utf-8")
     expected = hmac.new(key, _proof_payload(request).encode("utf-8"), sha256).hexdigest()
     if not hmac.compare_digest(expected, request.approval_proof):
         raise ValueError("approval proof mismatch")
-    if not _claim_nonce(request.nonce, request.issued_at + 300):
+    if not (claim_nonce or _claim_nonce)(request.nonce):
         raise ValueError("approval proof nonce replayed")
 
 
 @mcp.tool(annotations=WRITE_TOOL, structured_output=True)
-def rollback_release(request: RollbackReleaseRequest) -> dict[str, object]:
-    """Validate approval proof and execute the fixed v2 -> v1 rollback."""
+async def rollback_release(
+    request: RollbackReleaseRequest,
+    tencent_tat: TencentTatConfig,
+) -> dict[str, object]:
+    """Execute an already approved rollback through Tencent Cloud TAT."""
 
-    verify_approval_proof(request)
-    result = run_rollback_release(
-        request.target_version,
-        expected_current_version=request.current_version,
-    )
-    return {"status": "succeeded" if result["returncode"] == 0 else "failed", "runner": result}
+    try:
+        verify_approval_proof(request)
+        return await asyncio.to_thread(invoke_tencent_tat_rollback, request, tencent_tat)
+    except (TencentTatError, ValueError) as exc:
+        return {"status": "failed", "provider": "tencent_tat", "error": str(exc)}
 
 
 @mcp.custom_route("/health/ready", methods=["GET"])

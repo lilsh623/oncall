@@ -19,7 +19,7 @@ class RouterDecision(BaseModel):
     intent: ConversationIntent
     action: IncidentAction = "NONE"
     incident_id: UUID | None = None
-    project_id: str = "demo-shop"
+    project_id: str | None = None
     environment: str | None = None
     service: str | None = None
     confidence: float = Field(default=1.0, ge=0, le=1)

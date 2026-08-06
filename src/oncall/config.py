@@ -55,15 +55,11 @@ class Settings(BaseSettings):
     )
     recovery_mcp_url: str
     recovery_mcp_secret: SecretStr
-    recovery_approval_secret: SecretStr = Field(
-        default=SecretStr("demo-only-recovery-approval-secret"), min_length=16
-    )
+    recovery_approval_secret: SecretStr = Field(min_length=32)
     # Recovery verification queries the error rate over a short rate window, so a
     # brief wait after rollback is enough for that window to clear the pre-rollback
     # 5xx errors before the health check runs.
     recovery_verification_wait_seconds: float = Field(default=45.0, ge=0, le=300)
-    alertmanager_webhook_secrets: dict[str, SecretStr] = Field(default_factory=dict)
-    alert_fingerprint_stable_labels: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def validate_embedding_model_dimension(self) -> "Settings":
@@ -81,12 +77,6 @@ class Settings(BaseSettings):
             == self.recovery_approval_secret.get_secret_value()
         ):
             raise ValueError("Recovery transport and approval secrets must be independent")
-        if self.app_env == "production" and (
-            self.recovery_mcp_secret.get_secret_value() == "demo-only-recovery-mcp-secret"
-            or self.recovery_approval_secret.get_secret_value()
-            == "demo-only-recovery-approval-secret"
-        ):
-            raise ValueError("production requires non-demo Recovery MCP secrets")
         return self
 
 

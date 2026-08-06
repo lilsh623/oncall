@@ -33,8 +33,11 @@ export class ApiClient {
     }
     if (response.status === 401) this.onUnauthenticated();
     if (!response.ok) {
-      const message = await response.json().catch(() => ({ detail: "请求失败" }));
-      throw new Error(String(message.detail ?? `请求失败：${response.status}`));
+      const message = await response.json().catch(() => ({ detail: "请求失败" })) as { detail?: unknown };
+      const detail = Array.isArray(message.detail)
+        ? message.detail.map((item) => typeof item === "object" && item && "msg" in item ? String(item.msg) : String(item)).join("；")
+        : String(message.detail ?? `请求失败：${response.status}`);
+      throw new Error(detail);
     }
     if (response.status === 204) return undefined as T;
     return response.json() as Promise<T>;
